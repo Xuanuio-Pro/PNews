@@ -1,0 +1,41 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+detai1/
+
+# Local secrets and machine-specific config
+.env
+.env.*
+!.env.example
+config/api_keys.json
+
+# Runtime outputs
+logs/
+*.log
+data/*.csv
+data/*.sqlite3
+data/*.db
+data/generated_images/
+data/thumbnails/
+data/summaries/
+data/uploads/
+data/raw/
+data/exports/
+data/processed/
+data/daily/
+data/master/
+data/qa/
+
+# Tooling/editor noise
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
