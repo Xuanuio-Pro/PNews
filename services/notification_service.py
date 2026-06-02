@@ -115,6 +115,9 @@ class NotificationService:
             row = conn.execute("SELECT * FROM articles WHERE id = ?", (int(article_id),)).fetchone()
             return dict(row) if row else None
 
+    def article_columns(self, conn):
+        return {row["name"] for row in conn.execute("PRAGMA table_info(articles)")}
+
     def is_publishable(self, article):
         status = str((article or {}).get("status") or "").strip()
         normalized = unicodedata.normalize("NFKD", status).encode("ascii", "ignore").decode("ascii").lower()
@@ -235,13 +238,15 @@ class NotificationService:
         self.ensure_tables()
         limit = max(1, int(limit or 5))
         with self.connect() as conn:
+            columns = self.article_columns(conn)
+            published_expr = "NULLIF(published_at, '')" if "published_at" in columns else "NULL"
             rows = conn.execute(
-                """
+                f"""
                 SELECT * FROM articles
                 WHERE status IN ('approved', 'published', 'Đã đăng')
                 ORDER BY
-                    date(COALESCE(NULLIF(crawled_at, ''), created_at)) DESC,
-                    datetime(COALESCE(NULLIF(crawled_at, ''), created_at)) DESC,
+                    date(COALESCE({published_expr}, NULLIF(crawled_at, ''), created_at)) DESC,
+                    datetime(COALESCE({published_expr}, NULLIF(crawled_at, ''), created_at)) DESC,
                     id DESC
                 LIMIT ?
                 """,

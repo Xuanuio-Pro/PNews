@@ -1,13 +1,23 @@
 import argparse
+import sys
 from pathlib import Path
 
 from services.image_generator import create_news_cards_from_csv
 from services.storage import current_date_folder
 
 
+def safe_print(message):
+    try:
+        print(message)
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or "utf-8"
+        text = str(message).encode(encoding, errors="replace").decode(encoding)
+        print(text)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Generate IEC News cards from exported crawler CSV data."
+        description="Generate P-News cards from exported crawler CSV data."
     )
     parser.add_argument(
         "--input",
@@ -27,7 +37,7 @@ def parse_args():
     )
     parser.add_argument(
         "--brand",
-        default="IEC News",
+        default="P-News",
         help="Brand text displayed at the top-right corner.",
     )
     parser.add_argument(
@@ -47,15 +57,14 @@ def main():
     args = parse_args()
     limit = None if args.limit == 0 else args.limit
     output_dir = args.output_dir or f"data/generated_images/{current_date_folder()}"
-
     input_path = Path(args.input)
 
     if not input_path.exists():
-        print(f"Không tìm thấy file input: {input_path}")
+        safe_print(f"Không tìm thấy file input: {input_path}")
         return
 
     if is_empty_csv(input_path):
-        print(f"Không có bài mới trong file: {input_path}")
+        safe_print(f"Không có bài mới trong file: {input_path}")
         return
 
     if args.clean:
@@ -69,7 +78,7 @@ def main():
         require_thumbnail=args.require_thumbnail,
     )
 
-    print(f"Đã tạo {len(output_paths)} ảnh news card.")
+    safe_print(f"Đã tạo {len(output_paths)} ảnh news card.")
 
 
 def clean_output_dir(output_dir):
@@ -84,7 +93,6 @@ def clean_output_dir(output_dir):
 def is_empty_csv(path):
     with path.open("r", encoding="utf-8-sig") as file:
         lines = [line for line in file if line.strip()]
-
     return len(lines) <= 1
 
 

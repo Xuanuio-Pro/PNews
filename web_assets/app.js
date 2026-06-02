@@ -1,3 +1,115 @@
+const showAdminLoadingOverlay = (titleText) => {
+  const overlay = document.querySelector("[data-admin-loading]");
+  if (!(overlay instanceof HTMLElement)) {
+    return;
+  }
+  const title = overlay.querySelector("[data-admin-loading-title]");
+  if (title instanceof HTMLElement && titleText) {
+    title.textContent = titleText;
+  }
+  overlay.classList.add("is-visible");
+  overlay.setAttribute("aria-hidden", "false");
+};
+
+const lockFormWhileSubmitting = (form, submitter) => {
+  if (!(form instanceof HTMLFormElement)) {
+    return;
+  }
+  if (form.dataset.submitting === "true") {
+    return;
+  }
+  form.dataset.submitting = "true";
+  const activeSubmitter =
+    submitter instanceof HTMLButtonElement || submitter instanceof HTMLInputElement
+      ? submitter
+      : null;
+  form.querySelectorAll("button, input[type='submit']").forEach((button) => {
+    if (activeSubmitter && button === activeSubmitter) {
+      return;
+    }
+    if (button instanceof HTMLButtonElement || button instanceof HTMLInputElement) {
+      button.disabled = true;
+    }
+  });
+};
+
+const openArticleTarget = (container) => {
+  if (!(container instanceof HTMLElement)) {
+    return;
+  }
+  const url = container.dataset.articleUrl;
+  if (!url) {
+    return;
+  }
+  if (container.dataset.articleExternal === "1") {
+    window.open(url, "_blank", "noopener");
+    return;
+  }
+  window.location.href = url;
+};
+
+const updateBulkExportState = () => {
+  document.querySelectorAll("[data-export-selected-png]").forEach((button) => {
+    if (!(button instanceof HTMLButtonElement)) {
+      return;
+    }
+    const form = button.closest("form");
+    const selected = form?.querySelectorAll("[data-row-check]:checked").length || 0;
+    button.disabled = selected === 0;
+    button.setAttribute("aria-disabled", selected === 0 ? "true" : "false");
+  });
+};
+
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return;
+  }
+  const exportButton = target.closest("[data-export-selected-png]");
+  if (exportButton instanceof HTMLElement) {
+    if (exportButton instanceof HTMLButtonElement && exportButton.disabled) {
+      return;
+    }
+    const form = exportButton.closest("form");
+    const selected = Array.from(form?.querySelectorAll("[data-row-check]:checked") || []);
+    if (!selected.length) {
+      window.alert(exportButton.dataset.confirmBulk || "Bạn chưa chọn bài nào.");
+      return;
+    }
+    selected.forEach((checkbox, index) => {
+      if (!(checkbox instanceof HTMLInputElement) || !checkbox.value) {
+        return;
+      }
+      window.setTimeout(() => {
+        const link = document.createElement("a");
+        link.href = `/admin/articles/${encodeURIComponent(checkbox.value)}/export.png`;
+        link.download = "";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }, index * 250);
+    });
+    return;
+  }
+  if (target.closest("a, button, input, label, select, textarea")) {
+    return;
+  }
+  const container = target.closest("[data-article-url]");
+  openArticleTarget(container);
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
+  }
+  const target = event.target;
+  if (!(target instanceof HTMLElement) || !target.matches("[data-article-url]")) {
+    return;
+  }
+  event.preventDefault();
+  openArticleTarget(target);
+});
+
 document.addEventListener("submit", (event) => {
   const form = event.target;
   if (!(form instanceof HTMLFormElement)) {
@@ -23,8 +135,16 @@ document.addEventListener("submit", (event) => {
       const ok = window.confirm(`Bạn chắc chắn muốn xóa ${selected} bài đã chọn?`);
       if (!ok) {
         event.preventDefault();
+        return;
       }
     }
+  }
+
+  if (form.matches(".bulk-review-form")) {
+    const actionButton = submitter instanceof HTMLButtonElement ? submitter : null;
+    const actionLabel = actionButton?.textContent?.trim() || "Đang xử lý duyệt bài...";
+    showAdminLoadingOverlay(actionLabel);
+    lockFormWhileSubmitting(form, submitter);
   }
 });
 
@@ -41,6 +161,9 @@ document.addEventListener("input", (event) => {
 document.addEventListener("change", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLInputElement)) {
+    if (target instanceof HTMLSelectElement && target.form?.matches("[data-auto-submit]")) {
+      target.form.requestSubmit();
+    }
     return;
   }
 
@@ -48,6 +171,7 @@ document.addEventListener("change", (event) => {
     document.querySelectorAll("[data-row-check]").forEach((checkbox) => {
       checkbox.checked = target.checked;
     });
+    updateBulkExportState();
   }
 
   if (target.matches("[data-row-check]")) {
@@ -57,8 +181,31 @@ document.addEventListener("change", (event) => {
       selectAll.checked = checks.length > 0 && checks.every((checkbox) => checkbox.checked);
       selectAll.indeterminate = checks.some((checkbox) => checkbox.checked) && !selectAll.checked;
     }
+    updateBulkExportState();
+  }
+
+  if (target.form?.matches("[data-auto-submit]")) {
+    target.form.requestSubmit();
   }
 });
+
+document.querySelectorAll("form[data-auto-submit]").forEach((form) => {
+  if (!(form instanceof HTMLFormElement)) {
+    return;
+  }
+
+  let searchTimer = 0;
+  form.querySelectorAll('input[type="search"]').forEach((input) => {
+    input.addEventListener("input", () => {
+      window.clearTimeout(searchTimer);
+      searchTimer = window.setTimeout(() => {
+        form.requestSubmit();
+      }, 450);
+    });
+  });
+});
+
+updateBulkExportState();
 
 const scrollTopButton = document.querySelector("[data-scroll-top]");
 if (scrollTopButton instanceof HTMLButtonElement) {
@@ -135,11 +282,15 @@ if (chatbot instanceof HTMLElement) {
       image.src = article.thumbnail;
       image.alt = article.title || "IEC News";
       image.loading = "lazy";
-      image.addEventListener("error", () => {
-        image.remove();
-        imageWrap.textContent = "IEC";
-        imageWrap.classList.add("is-fallback");
-      }, { once: true });
+      image.addEventListener(
+        "error",
+        () => {
+          image.remove();
+          imageWrap.textContent = "IEC";
+          imageWrap.classList.add("is-fallback");
+        },
+        { once: true },
+      );
       imageWrap.appendChild(image);
     } else {
       imageWrap.textContent = "IEC";
@@ -201,7 +352,7 @@ if (chatbot instanceof HTMLElement) {
         loading.remove();
       }
       appendMessage("bot", data.answer || "Tôi chưa tìm thấy câu trả lời phù hợp.", data.articles || []);
-    } catch (error) {
+    } catch (_error) {
       if (loading) {
         loading.remove();
       }

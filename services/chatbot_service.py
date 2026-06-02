@@ -27,8 +27,8 @@ CHAT_SUGGESTIONS = [
     "Tin kinh doanh",
     "Tin giáo dục",
     "Tin từ VNExpress",
-    "Tin từ Dân trí",
-    "Tin từ 24h",
+    "Tin từ Báo Chính phủ",
+    "Tin từ PTIT",
     "Tóm tắt tin hôm nay",
     "Tìm bài về AI",
 ]
@@ -290,6 +290,7 @@ def build_ai_prompt(message, articles):
                 "category": article.get("category", ""),
                 "content_topic": article.get("content_topic", ""),
                 "url": article.get("url", ""),
+                "published_at": article.get("published_at", ""),
                 "crawled_at": article.get("crawled_at", ""),
             }
             for article in articles[:12]

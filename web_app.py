@@ -1,12 +1,14 @@
 import csv
 import hashlib
 import html
+import io
 import json
 import os
 import re
 import secrets
 import shutil
 import sqlite3
+import threading
 import unicodedata
 from datetime import datetime
 from http import HTTPStatus
@@ -15,8 +17,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+from PIL import Image
+
 from services.article_search import find_rendered_image
 from services.chatbot_service import CHAT_SUGGESTIONS, handle_chat_message, init_chat_logs
+from services.image_generator import generate_news_card
 from services.notification_service import NotificationService
 
 
@@ -30,12 +35,28 @@ ADMIN_USERNAME = os.environ.get("IEC_ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.environ.get("IEC_ADMIN_PASSWORD", "admin123")
 SESSION_COOKIE = "iec_cms_session"
 SESSIONS = set()
+CLIENT_PAGE_SIZE = 12
+ADMIN_PAGE_SIZE = 10
+CLIENT_TOPIC_ORDER = [
+    "Tin tức chung",
+    "Tin tức PTIT",
+    "Giáo dục",
+    "Khoa học - Công nghệ",
+    "Kinh doanh",
+    "Pháp luật",
+    "Sức khỏe",
+    "Thế giới",
+    "Thể thao",
+    "Thời sự",
+    "Giải trí",
+]
 
 ARTICLE_COLUMNS = [
     "source",
     "title",
     "url",
     "crawled_at",
+    "published_at",
     "thumbnail",
     "summary",
     "summary_source",
@@ -43,6 +64,8 @@ ARTICLE_COLUMNS = [
     "content_topic",
     "category",
 ]
+
+DEPRECATED_SOURCES = {"Dân trí", "24h"}
 
 STATUS_LABELS = {
     "pending": "Chờ duyệt",
@@ -56,6 +79,10 @@ ALLOWED_UPLOAD_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
 def now_iso():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def today_iso_date():
+    return datetime.now().strftime("%Y-%m-%d")
 
 
 def slugify(value):
@@ -72,8 +99,12 @@ def escape(value):
 
 def connect_db():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA temp_store=MEMORY")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -87,6 +118,7 @@ def init_db():
                 title TEXT NOT NULL,
                 url TEXT DEFAULT '',
                 crawled_at TEXT DEFAULT '',
+                published_at TEXT DEFAULT '',
                 thumbnail TEXT DEFAULT '',
                 summary TEXT DEFAULT '',
                 summary_source TEXT DEFAULT '',
@@ -97,16 +129,52 @@ def init_db():
                 status TEXT NOT NULL DEFAULT 'pending',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                approved_at TEXT DEFAULT '',
                 reviewed_at TEXT DEFAULT '',
                 deleted_at TEXT DEFAULT ''
             )
             """
         )
+        ensure_article_schema(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_status ON articles(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_source ON articles(source)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_topic ON articles(content_topic)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_category ON articles(category)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_articles_status_published ON articles(status, published_at)"
+        )
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_articles_url ON articles(url) WHERE url != ''")
         conn.commit()
     init_chat_logs()
     seed_articles_from_csv()
+
+
+def ensure_article_schema(conn):
+    columns = get_table_columns(conn, "articles")
+    migrations = {
+        "published_at": "ALTER TABLE articles ADD COLUMN published_at TEXT DEFAULT ''",
+        "approved_at": "ALTER TABLE articles ADD COLUMN approved_at TEXT DEFAULT ''",
+    }
+
+    for column, sql in migrations.items():
+        if column not in columns:
+            conn.execute(sql)
+
+    conn.execute(
+        """
+        UPDATE articles
+        SET published_at = COALESCE(NULLIF(published_at, ''), NULLIF(crawled_at, ''), created_at)
+        WHERE published_at IS NULL OR TRIM(published_at) = ''
+        """
+    )
+    conn.execute(
+        """
+        UPDATE articles
+        SET approved_at = COALESCE(NULLIF(approved_at, ''), NULLIF(reviewed_at, ''))
+        WHERE status = 'approved' AND (approved_at IS NULL OR TRIM(approved_at) = '')
+        """
+    )
 
 
 def seed_articles_from_csv():
@@ -116,42 +184,75 @@ def seed_articles_from_csv():
 
     generated_images = find_generated_images()
 
-    with csv_path.open("r", encoding="utf-8-sig", newline="") as file:
-        rows = list(csv.DictReader(file))
-
     with connect_db() as conn:
         existing_urls = {
-            row["url"]
-            for row in conn.execute("SELECT url FROM articles WHERE url != ''")
+            row["url"]: row["id"]
+            for row in conn.execute("SELECT id, url FROM articles WHERE url != ''")
         }
-        for row in rows:
-            url = row.get("url", "").strip()
-            title = row.get("title", "").strip()
-            if not title or (url and url in existing_urls):
-                continue
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as file:
+            for row in csv.DictReader(file):
+                if is_deprecated_source(row.get("source", "")):
+                    continue
 
-            image_path = match_generated_image(title, generated_images)
-            values = {column: row.get(column, "") for column in ARTICLE_COLUMNS}
-            values["image_path"] = image_path
-            values["created_at"] = now_iso()
-            values["updated_at"] = values["created_at"]
-            conn.execute(
-                """
-                INSERT INTO articles (
-                    source, title, url, crawled_at, thumbnail, summary,
-                    summary_source, newspaper_type, content_topic, category,
-                    image_path, created_at, updated_at
-                ) VALUES (
-                    :source, :title, :url, :crawled_at, :thumbnail, :summary,
-                    :summary_source, :newspaper_type, :content_topic, :category,
-                    :image_path, :created_at, :updated_at
+                url = row.get("url", "").strip()
+                title = row.get("title", "").strip()
+                if not title:
+                    continue
+
+                image_path = match_generated_image(title, generated_images)
+                values = {column: row.get(column, "") for column in ARTICLE_COLUMNS}
+                values["image_path"] = image_path
+                values["created_at"] = now_iso()
+                values["updated_at"] = values["created_at"]
+
+                if url and url in existing_urls:
+                    conn.execute(
+                        """
+                        UPDATE articles
+                        SET
+                            published_at = CASE
+                                WHEN published_at IS NULL OR TRIM(published_at) = '' THEN :published_at
+                                ELSE published_at
+                            END,
+                            crawled_at = CASE
+                                WHEN crawled_at IS NULL OR TRIM(crawled_at) = '' THEN :crawled_at
+                                ELSE crawled_at
+                            END,
+                            summary_source = CASE
+                                WHEN summary_source IS NULL OR TRIM(summary_source) = '' THEN :summary_source
+                                ELSE summary_source
+                            END,
+                            image_path = CASE
+                                WHEN image_path IS NULL OR TRIM(image_path) = '' THEN :image_path
+                                ELSE image_path
+                            END
+                        WHERE id = :id
+                        """,
+                        {**values, "id": existing_urls[url]},
+                    )
+                    continue
+
+                conn.execute(
+                    """
+                    INSERT INTO articles (
+                        source, title, url, crawled_at, published_at, thumbnail, summary,
+                        summary_source, newspaper_type, content_topic, category,
+                        image_path, created_at, updated_at
+                    ) VALUES (
+                        :source, :title, :url, :crawled_at, :published_at, :thumbnail, :summary,
+                        :summary_source, :newspaper_type, :content_topic, :category,
+                        :image_path, :created_at, :updated_at
+                    )
+                    """,
+                    values,
                 )
-                """,
-                values,
-            )
-            if url:
-                existing_urls.add(url)
+                if url:
+                    existing_urls[url] = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
         conn.commit()
+
+
+def is_deprecated_source(source):
+    return str(source or "").strip() in DEPRECATED_SOURCES
 
 
 def find_generated_images():
@@ -172,7 +273,233 @@ def match_generated_image(title, generated_images):
     return ""
 
 
-def query_articles(status=None, q=None, topic=None, source=None, limit=None):
+def to_relative_media_path(path_or_url):
+    value = str(path_or_url or "").strip()
+    if not value or value.startswith(("http://", "https://")):
+        return ""
+
+    path = Path(value)
+    if not path.is_absolute():
+        path = BASE_DIR / path
+
+    if not path.exists() or not path.is_file():
+        return ""
+
+    try:
+        return str(path.resolve().relative_to(BASE_DIR.resolve())).replace("\\", "/")
+    except ValueError:
+        return str(path.resolve()).replace("\\", "/")
+
+
+def ensure_generated_image_for_article(article_id):
+    updated = ensure_generated_images_for_articles([article_id])
+    if not updated:
+        return ""
+    article = get_article(article_id)
+    return str(article["image_path"] or "") if article else ""
+
+
+def resolve_article_export_image(article):
+    if not article or article["status"] != "approved":
+        return None
+
+    image_path = to_relative_media_path(article["image_path"])
+    if not image_path:
+        ensure_generated_image_for_article(article["id"])
+        refreshed = get_article(article["id"])
+        if refreshed:
+            article = refreshed
+            image_path = to_relative_media_path(article["image_path"])
+
+    if not image_path:
+        image_path = find_rendered_image(article["title"])
+
+    if not image_path:
+        return None
+
+    target = (BASE_DIR / image_path).resolve()
+    try:
+        target.relative_to(BASE_DIR.resolve())
+    except ValueError:
+        return None
+    if not target.exists() or not target.is_file():
+        return None
+    return target
+
+
+def ensure_generated_images_for_articles(article_ids):
+    ids = [int(raw_id) for raw_id in (article_ids or []) if str(raw_id).isdigit()]
+    if not ids:
+        return 0
+
+    placeholders = ",".join("?" for _ in ids)
+    with connect_db() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM articles WHERE id IN ({placeholders})",
+            ids,
+        ).fetchall()
+
+    if not rows:
+        return 0
+
+    generated_images = find_generated_images()
+    output_dir = DATA_DIR / "generated_images" / datetime.now().strftime("%Y-%m-%d")
+    timestamp = now_iso()
+    updates = []
+
+    for row in rows:
+        article = dict(row)
+        article_id = int(article["id"])
+
+        existing = to_relative_media_path(article.get("image_path"))
+        if existing:
+            if existing != (article.get("image_path") or ""):
+                updates.append((existing, timestamp, article_id))
+            continue
+
+        matched = match_generated_image(article.get("title", ""), generated_images)
+        if matched:
+            updates.append((matched, timestamp, article_id))
+            continue
+
+        try:
+            generated_path = generate_news_card(article, str(output_dir))
+            relative_path = to_relative_media_path(generated_path)
+        except Exception as exc:
+            print(f"[WARN] Khong tao duoc anh an pham cho bai #{article_id}: {exc}")
+            continue
+
+        if relative_path:
+            updates.append((relative_path, timestamp, article_id))
+            generated_images.insert(0, Path(BASE_DIR / relative_path))
+
+    if not updates:
+        return 0
+
+    with connect_db() as conn:
+        conn.executemany(
+            "UPDATE articles SET image_path = ?, updated_at = ? WHERE id = ?",
+            updates,
+        )
+        conn.commit()
+
+    return len(updates)
+
+
+def ensure_generated_images_for_rows(rows, limit=4):
+    missing_ids = []
+    for row in rows or []:
+        image_path = to_relative_media_path(row["image_path"])
+        if not image_path and str(row["id"]).isdigit():
+            missing_ids.append(int(row["id"]))
+    if not missing_ids:
+        return 0
+    return ensure_generated_images_for_articles(missing_ids[: max(1, int(limit or 1))])
+
+
+def normalize_text_key(value):
+    text = unicodedata.normalize("NFD", str(value or ""))
+    text = "".join(char for char in text if unicodedata.category(char) != "Mn")
+    return " ".join(text.casefold().split())
+
+
+def resolve_client_topic(value):
+    value_key = normalize_text_key(value)
+    for topic in CLIENT_TOPIC_ORDER:
+        if normalize_text_key(topic) == value_key:
+            return topic
+    return str(value or "").strip()
+
+
+def canonical_topic_from_values(source="", category="", content_topic=""):
+    source_key = normalize_text_key(source)
+    raw = str(category or content_topic or "").strip()
+    raw_key = normalize_text_key(raw)
+
+    if "ptit" in source_key or "ptit" in raw_key:
+        return "Tin tức PTIT"
+    if "giao duc" in raw_key:
+        return "Giáo dục"
+    if "khoa giao" in raw_key or "khoa hoc" in raw_key or "cong nghe" in raw_key:
+        return "Khoa học - Công nghệ"
+    if "kinh doanh" in raw_key:
+        return "Kinh doanh"
+    if "phap luat" in raw_key:
+        return "Pháp luật"
+    if "suc khoe" in raw_key:
+        return "Sức khỏe"
+    if "the gioi" in raw_key:
+        return "Thế giới"
+    if "the thao" in raw_key:
+        return "Thể thao"
+    if "thoi su" in raw_key:
+        return "Thời sự"
+    if "giai tri" in raw_key:
+        return "Giải trí"
+    if "tin tuc chung" in raw_key:
+        return "Thời sự"
+    return raw or "Tin mới"
+
+
+def canonical_topic_sql_expr():
+    raw = "COALESCE(NULLIF(category, ''), NULLIF(content_topic, ''), '')"
+    source = "COALESCE(source, '')"
+    return f"""
+    CASE
+      WHEN {source} LIKE '%PTIT%' OR {raw} LIKE '%PTIT%' THEN 'Tin tức PTIT'
+      WHEN {raw} LIKE '%Giáo dục%' OR {raw} LIKE '%giao duc%' THEN 'Giáo dục'
+      WHEN {raw} LIKE '%Khoa giáo%' OR {raw} LIKE '%Khoa học%' OR {raw} LIKE '%Công nghệ%' OR {raw} LIKE '%khoa hoc%' OR {raw} LIKE '%cong nghe%' THEN 'Khoa học - Công nghệ'
+      WHEN {raw} LIKE '%Kinh doanh%' OR {raw} LIKE '%kinh doanh%' THEN 'Kinh doanh'
+      WHEN {raw} LIKE '%Pháp luật%' OR {raw} LIKE '%phap luat%' THEN 'Pháp luật'
+      WHEN {raw} LIKE '%Sức khỏe%' OR {raw} LIKE '%suc khoe%' THEN 'Sức khỏe'
+      WHEN {raw} LIKE '%Thế giới%' OR {raw} LIKE '%the gioi%' THEN 'Thế giới'
+      WHEN {raw} LIKE '%Thể thao%' OR {raw} LIKE '%the thao%' THEN 'Thể thao'
+      WHEN {raw} LIKE '%Thời sự%' OR {raw} LIKE '%thoi su%' THEN 'Thời sự'
+      WHEN {raw} LIKE '%Giải trí%' OR {raw} LIKE '%giai tri%' THEN 'Giải trí'
+      WHEN {raw} LIKE '%Tin tức chung%' OR {raw} LIKE '%tin tuc chung%' THEN 'Thời sự'
+      ELSE {raw}
+    END
+    """
+
+
+def client_topic_label(article):
+    if isinstance(article, sqlite3.Row):
+        return canonical_topic_from_values(
+            article["source"],
+            article["category"],
+            article["content_topic"],
+        )
+    return canonical_topic_from_values(
+        article.get("source", ""),
+        article.get("category", ""),
+        article.get("content_topic", ""),
+    )
+
+
+def admin_date_filter_from_query(query):
+    raw_date = (query.get("date") or [None])[0]
+    if raw_date is None:
+        return today_iso_date()
+
+    value = str(raw_date or "").strip().lower()
+    if value in {"all", "any"}:
+        return ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return min(value, today_iso_date())
+    return today_iso_date()
+
+
+def article_date_sql_expr(status=None):
+    if status == "approved":
+        return "COALESCE(NULLIF(approved_at, ''), NULLIF(reviewed_at, ''), NULLIF(updated_at, ''), NULLIF(published_at, ''), NULLIF(crawled_at, ''), created_at)"
+    if status == "rejected":
+        return "COALESCE(NULLIF(reviewed_at, ''), NULLIF(updated_at, ''), NULLIF(published_at, ''), NULLIF(crawled_at, ''), created_at)"
+    if status == "deleted":
+        return "COALESCE(NULLIF(deleted_at, ''), NULLIF(updated_at, ''), NULLIF(published_at, ''), NULLIF(crawled_at, ''), created_at)"
+    return "COALESCE(NULLIF(published_at, ''), NULLIF(crawled_at, ''), created_at)"
+
+
+def article_filter_where(status=None, q=None, topic=None, source=None, date_filter=None, canonical_topic=False):
     where = []
     params = {}
 
@@ -185,28 +512,91 @@ def query_articles(status=None, q=None, topic=None, source=None, limit=None):
         params["q"] = f"%{q}%"
 
     if topic:
-        where.append("(content_topic = :topic OR category = :topic)")
+        if canonical_topic:
+            topic = resolve_client_topic(topic)
+            if topic == "Tin tức chung":
+                where.append(
+                    "(lower(COALESCE(source, '')) NOT LIKE '%ptit%' "
+                    "AND lower(COALESCE(source, '')) NOT LIKE '%buu chinh%' "
+                    "AND lower(COALESCE(source, '')) NOT LIKE '%bưu chính%')"
+                )
+            else:
+                where.append(f"({canonical_topic_sql_expr()} = :topic)")
+        else:
+            where.append("(content_topic = :topic OR category = :topic)")
         params["topic"] = topic
 
     if source:
         where.append("source = :source")
         params["source"] = source
 
+    if date_filter:
+        where.append(f"date({article_date_sql_expr(status)}) = :date_filter")
+        params["date_filter"] = date_filter
+
+    return where, params
+
+
+def query_articles(status=None, q=None, topic=None, source=None, date_filter=None, limit=None, offset=0, canonical_topic=False):
+    where, params = article_filter_where(
+        status=status,
+        q=q,
+        topic=topic,
+        source=source,
+        date_filter=date_filter,
+        canonical_topic=canonical_topic,
+    )
     sql = "SELECT * FROM articles"
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += """
-    ORDER BY
-      date(COALESCE(NULLIF(crawled_at, ''), created_at)) DESC,
-      datetime(COALESCE(NULLIF(crawled_at, ''), created_at)) DESC,
-      id DESC
-    """
+    if status == "approved":
+        sql += """
+        ORDER BY
+          date(COALESCE(NULLIF(approved_at, ''), NULLIF(reviewed_at, ''), NULLIF(updated_at, ''), NULLIF(published_at, ''), NULLIF(crawled_at, ''), created_at)) DESC,
+          datetime(COALESCE(NULLIF(approved_at, ''), NULLIF(reviewed_at, ''), NULLIF(updated_at, ''), NULLIF(published_at, ''), NULLIF(crawled_at, ''), created_at)) DESC,
+          CASE
+            WHEN lower(COALESCE(source, '')) LIKE '%ptit%' THEN 0
+            WHEN lower(COALESCE(source, '')) LIKE '%buu chinh%' THEN 0
+            WHEN lower(COALESCE(source, '')) LIKE '%bưu chính%' THEN 0
+            ELSE 1
+          END ASC,
+          NULLIF(published_at, '') DESC,
+          id DESC
+        """
+    else:
+        sql += """
+        ORDER BY
+          date(COALESCE(NULLIF(published_at, ''), NULLIF(crawled_at, ''), created_at)) DESC,
+          datetime(COALESCE(NULLIF(published_at, ''), NULLIF(crawled_at, ''), created_at)) DESC,
+          NULLIF(published_at, '') DESC,
+          id DESC
+        """
     if limit:
         sql += " LIMIT :limit"
         params["limit"] = limit
+        if offset:
+            sql += " OFFSET :offset"
+            params["offset"] = max(0, int(offset or 0))
 
     with connect_db() as conn:
         return conn.execute(sql, params).fetchall()
+
+
+def count_articles(status=None, q=None, topic=None, source=None, date_filter=None, canonical_topic=False):
+    where, params = article_filter_where(
+        status=status,
+        q=q,
+        topic=topic,
+        source=source,
+        date_filter=date_filter,
+        canonical_topic=canonical_topic,
+    )
+    sql = "SELECT COUNT(*) AS total FROM articles"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+
+    with connect_db() as conn:
+        return conn.execute(sql, params).fetchone()["total"]
 
 
 def get_article(article_id):
@@ -215,18 +605,33 @@ def get_article(article_id):
 
 
 def set_article_status(article_id, status):
-    reviewed_at = now_iso() if status in {"approved", "rejected"} else ""
-    deleted_at = now_iso() if status == "deleted" else ""
+    timestamp = now_iso()
     with connect_db() as conn:
         conn.execute(
             """
             UPDATE articles
-            SET status = ?, reviewed_at = ?, deleted_at = ?, updated_at = ?
-            WHERE id = ?
+            SET
+                status = :status,
+                reviewed_at = CASE
+                    WHEN :status IN ('approved', 'rejected') THEN :timestamp
+                    ELSE reviewed_at
+                END,
+                approved_at = CASE
+                    WHEN :status = 'approved' THEN :timestamp
+                    ELSE approved_at
+                END,
+                deleted_at = CASE
+                    WHEN :status = 'deleted' THEN :timestamp
+                    ELSE deleted_at
+                END,
+                updated_at = :timestamp
+            WHERE id = :id
             """,
-            (status, reviewed_at, deleted_at, now_iso(), article_id),
+            {"status": status, "timestamp": timestamp, "id": article_id},
         )
         conn.commit()
+
+    return True
 
 
 def set_articles_status(article_ids, status):
@@ -234,22 +639,45 @@ def set_articles_status(article_ids, status):
     if not ids:
         return 0
 
-    reviewed_at = now_iso() if status in {"approved", "rejected"} else ""
-    deleted_at = now_iso() if status == "deleted" else ""
-    placeholders = ",".join("?" for _ in ids)
-    params = [status, reviewed_at, deleted_at, now_iso(), *ids]
+    timestamp = now_iso()
+    params = {
+        "status": status,
+        "timestamp": timestamp,
+    }
+    id_placeholders = []
+    for index, article_id in enumerate(ids):
+        key = f"id_{index}"
+        id_placeholders.append(f":{key}")
+        params[key] = article_id
+    placeholders = ",".join(id_placeholders)
 
     with connect_db() as conn:
         cursor = conn.execute(
             f"""
             UPDATE articles
-            SET status = ?, reviewed_at = ?, deleted_at = ?, updated_at = ?
+            SET
+                status = :status,
+                reviewed_at = CASE
+                    WHEN :status IN ('approved', 'rejected') THEN :timestamp
+                    ELSE reviewed_at
+                END,
+                approved_at = CASE
+                    WHEN :status = 'approved' THEN :timestamp
+                    ELSE approved_at
+                END,
+                deleted_at = CASE
+                    WHEN :status = 'deleted' THEN :timestamp
+                    ELSE deleted_at
+                END,
+                updated_at = :timestamp
             WHERE id IN ({placeholders})
             """,
             params,
         )
         conn.commit()
-        return cursor.rowcount
+        rowcount = cursor.rowcount
+
+    return rowcount
 
 
 def create_uploaded_article(fields, file_part):
@@ -268,15 +696,16 @@ def create_uploaded_article(fields, file_part):
         conn.execute(
             """
             INSERT INTO articles (
-                source, title, url, crawled_at, thumbnail, summary,
+                source, title, url, crawled_at, published_at, thumbnail, summary,
                 newspaper_type, content_topic, category, image_path,
-                status, created_at, updated_at, reviewed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                status, created_at, updated_at, approved_at, reviewed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 fields.get("source", "Admin upload").strip() or "Admin upload",
                 title,
                 fields.get("url", "").strip(),
+                timestamp,
                 timestamp,
                 "",
                 fields.get("summary", "").strip(),
@@ -288,9 +717,12 @@ def create_uploaded_article(fields, file_part):
                 timestamp,
                 timestamp,
                 timestamp if status == "approved" else "",
+                timestamp if status == "approved" else "",
             ),
         )
+        article_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
         conn.commit()
+    return article_id, status
 
 
 def save_uploaded_file(file_part, title):
@@ -327,6 +759,31 @@ def get_topics(status="approved"):
             params,
         ).fetchall()
     return [row["value"] for row in rows]
+
+
+def get_client_topics(status="approved"):
+    params = {}
+    where = []
+    if status:
+        where.append("status = :status")
+        params["status"] = status
+    where_sql = " WHERE " + " AND ".join(where) if where else ""
+
+    with connect_db() as conn:
+        rows = conn.execute(
+            f"SELECT source, category, content_topic FROM articles{where_sql}",
+            params,
+        ).fetchall()
+
+    topics = {
+        canonical_topic_from_values(row["source"], row["category"], row["content_topic"])
+        for row in rows
+    }
+    if any("ptit" not in normalize_text_key(row["source"]) for row in rows):
+        topics.add("Tin tức chung")
+    ordered = [topic for topic in CLIENT_TOPIC_ORDER if topic in topics]
+    ordered.extend(sorted(topic for topic in topics if topic not in CLIENT_TOPIC_ORDER))
+    return ordered
 
 
 def get_sources(status=None):
@@ -474,12 +931,16 @@ def get_recent_articles(conn, columns, limit=10):
     status_expr = sql_value_expr(columns, "status")
     url_expr = sql_value_expr(columns, "url")
     crawled_expr = sql_value_expr(columns, "crawled_at")
+    published_expr = sql_value_expr(columns, "published_at")
     topic_expr = (
         "COALESCE(NULLIF(TRIM(content_topic), ''), NULLIF(TRIM(category), ''), '')"
         if {"content_topic", "category"}.issubset(columns)
         else sql_value_expr(columns, "content_topic", sql_value_expr(columns, "category"))
     )
     order_parts = []
+    if "published_at" in columns:
+        order_parts.append("datetime(NULLIF(published_at, '')) DESC")
+        order_parts.append("NULLIF(published_at, '') DESC")
     if "crawled_at" in columns:
         order_parts.append("datetime(NULLIF(crawled_at, '')) DESC")
         order_parts.append("NULLIF(crawled_at, '') DESC")
@@ -497,6 +958,7 @@ def get_recent_articles(conn, columns, limit=10):
             {topic_expr} AS topic,
             {status_expr} AS status,
             {crawled_expr} AS crawled_at,
+            {published_expr} AS published_at,
             {url_expr} AS url
         FROM articles
         ORDER BY {order_sql}
@@ -637,7 +1099,12 @@ def get_admin_dashboard_stats():
             topic_counts = get_topic_counts(conn, columns)
             recent_articles = get_recent_articles(conn, columns)
             latest_crawled_at = ""
-            if "crawled_at" in columns:
+            if "published_at" in columns:
+                row = conn.execute(
+                    "SELECT MAX(NULLIF(published_at, '')) AS latest FROM articles"
+                ).fetchone()
+                latest_crawled_at = row["latest"] or ""
+            if not latest_crawled_at and "crawled_at" in columns:
                 row = conn.execute(
                     "SELECT MAX(NULLIF(crawled_at, '')) AS latest FROM articles"
                 ).fetchone()
@@ -656,7 +1123,7 @@ def get_admin_dashboard_stats():
                 {"label": "Thiếu summary", "value": warnings["missing_summary"], "tone": "amber"},
                 {"label": "Thiếu thumbnail", "value": warnings["missing_thumbnail"], "tone": "amber"},
                 {"label": "Nguồn báo có dữ liệu", "value": len(source_counts), "tone": "blue"},
-                {"label": "Crawl gần nhất", "value": latest_crawled_at or "Chưa có", "tone": "muted", "wide": True},
+                {"label": "Ngày đăng mới nhất", "value": latest_crawled_at or "Chưa có", "tone": "muted", "wide": True},
             ])
 
             stats.update({
@@ -686,7 +1153,53 @@ def make_media_url(path_or_url):
 
 
 def article_image_url(article):
-    return make_media_url(article["image_path"] or article["thumbnail"])
+    if isinstance(article, sqlite3.Row):
+        title = article["title"] or ""
+        image_path = article["image_path"] or ""
+        thumbnail = article["thumbnail"] or ""
+    else:
+        title = article.get("title", "")
+        image_path = article.get("image_path", "")
+        thumbnail = article.get("thumbnail", "")
+
+    local_image = to_relative_media_path(image_path)
+    rendered = find_rendered_image(title)
+    return make_media_url(local_image or rendered or thumbnail)
+
+
+def article_target_url(article):
+    url = str(article["url"] or "").strip()
+    return url or f"/client/article/{article['id']}"
+
+
+def article_link_attrs(article):
+    url = article_target_url(article)
+    external = url.startswith(("http://", "https://"))
+    attrs = f'href="{escape(url)}"'
+    if external:
+        attrs += ' target="_blank" rel="noopener"'
+    return attrs
+
+
+def article_click_attrs(article):
+    url = article_target_url(article)
+    external = "1" if url.startswith(("http://", "https://")) else "0"
+    return f'data-article-url="{escape(url)}" data-article-external="{external}" tabindex="0"'
+
+
+def article_display_summary(article, context="client"):
+    summary = str(article["summary"] or "").strip()
+    if summary:
+        return summary
+
+    source = str(article["source"] or "IEC News").strip()
+    topic = str(article["category"] or article["content_topic"] or "Tin tức").strip()
+    title = str(article["title"] or "bài viết này").strip()
+
+    if context == "admin":
+        return f"Bài này chưa có tóm tắt crawl sẵn. Hệ thống sẽ cố gắng bù tóm tắt từ bài gốc khi tạo ảnh ấn phẩm: {title}."
+
+    return f"Cập nhật từ {source} thuộc chuyên mục {topic}: {title}."
 
 
 def render_select_options(items, selected_value, empty_label):
@@ -695,6 +1208,77 @@ def render_select_options(items, selected_value, empty_label):
         selected = "selected" if item == selected_value else ""
         options.append(f'<option value="{escape(item)}" {selected}>{escape(item)}</option>')
     return "".join(options)
+
+
+def render_date_filter_controls(date_filter, today_link, all_dates_link):
+    today = today_iso_date()
+    return f"""
+      <input type="date" name="date" value="{escape(date_filter)}" max="{escape(today)}" aria-label="Lọc theo ngày">
+      <div class="date-filter-actions">
+        <a class="button ghost compact {'active' if date_filter == today else ''}" href="{today_link}">Hôm nay</a>
+        <a class="button ghost compact {'active' if not date_filter else ''}" href="{all_dates_link}">Tất cả ngày</a>
+      </div>
+    """
+
+
+def parse_page(query):
+    raw_page = (query.get("page") or ["1"])[0]
+    try:
+        return max(1, int(raw_page))
+    except (TypeError, ValueError):
+        return 1
+
+
+def render_pagination(base_path, page, total, per_page, params=None):
+    params = dict(params or {})
+    total_pages = max(1, (int(total or 0) + per_page - 1) // per_page)
+
+    if total_pages <= 1:
+        return ""
+
+    page = min(max(1, int(page or 1)), total_pages)
+    start = max(1, page - 2)
+    end = min(total_pages, page + 2)
+
+    if end - start < 4:
+        start = max(1, min(start, end - 4))
+        end = min(total_pages, max(end, start + 4))
+
+    links = []
+
+    if page > 1:
+        links.append(pagination_link(base_path, page - 1, params, "Trước"))
+
+    for page_number in range(start, end + 1):
+        links.append(
+            pagination_link(
+                base_path,
+                page_number,
+                params,
+                str(page_number),
+                active=page_number == page,
+            )
+        )
+
+    if page < total_pages:
+        links.append(pagination_link(base_path, page + 1, params, "Sau"))
+
+    return f"""
+    <nav class="pagination" aria-label="Phân trang">
+      <span>Trang {page}/{total_pages} · {int(total or 0)} bài</span>
+      <div>{''.join(links)}</div>
+    </nav>
+    """
+
+
+def pagination_link(base_path, page, params, label, active=False):
+    query_parts = []
+    for key, value in params.items():
+        if value:
+            query_parts.append(f"{quote(str(key))}={quote(str(value))}")
+    query_parts.append(f"page={page}")
+    href = f"{base_path}?{'&'.join(query_parts)}"
+    return f'<a class="page-link {"active" if active else ""}" href="{href}">{escape(label)}</a>'
 
 
 def render_client_page(title, body, extra_class=""):
@@ -725,6 +1309,22 @@ def render_client_page(title, body, extra_class=""):
   {render_scroll_top_button()}
 </body>
 </html>"""
+
+
+def render_admin_head_actions(active_nav="articles"):
+    actions = [
+        ("dashboard", "Xem tổng quan", "/admin/dashboard", "ghost", False),
+        ("articles", "Duyệt bài", "/admin", "primary", False),
+        ("upload", "Tải ấn phẩm", "/admin/upload", "primary", False),
+        ("client", "Xem client", "/client", "ghost", True),
+    ]
+    buttons = []
+    for key, label, href, variant, external in actions:
+        if key == active_nav:
+            continue
+        attrs = ' target="_blank" rel="noopener"' if external else ""
+        buttons.append(f'<a class="button {variant}" href="{href}"{attrs}>{escape(label)}</a>')
+    return '<div class="admin-actions">' + "".join(buttons) + "</div>"
 
 
 def render_admin_page(title, body, extra_class="", active_nav="articles"):
@@ -762,9 +1362,21 @@ def render_admin_page(title, body, extra_class="", active_nav="articles"):
   <main class="admin-shell">
     {body}
   </main>
+  {render_admin_loading_overlay()}
   {render_scroll_top_button()}
 </body>
 </html>"""
+
+
+def render_admin_loading_overlay():
+    return """
+  <div class="admin-loading-overlay" data-admin-loading aria-hidden="true">
+    <div class="admin-loading-card" role="status" aria-live="polite">
+      <div class="admin-loading-spinner" aria-hidden="true"></div>
+      <strong data-admin-loading-title>Đang xử lý duyệt bài...</strong>
+      <p>Vui lòng chờ, hệ thống đang cập nhật trạng thái và tạo ấn phẩm.</p>
+    </div>
+  </div>"""
 
 
 def render_auth_page(title, body):
@@ -829,13 +1441,72 @@ def render_chat_widget():
   </section>"""
 
 
+def client_filter_url(q="", source="", topic="", date_filter=None, page=1):
+    parts = []
+    if q:
+        parts.append(f"q={quote(q)}")
+    if source:
+        parts.append(f"source={quote(source)}")
+    if topic:
+        parts.append(f"topic={quote(topic)}")
+    if date_filter == "":
+        parts.append("date=all")
+    elif date_filter:
+        parts.append(f"date={quote(str(date_filter))}")
+    if int(page or 1) > 1:
+        parts.append(f"page={int(page)}")
+    return "/client" + (("?" + "&".join(parts)) if parts else "")
+
+
 def render_client_home(query):
     q = (query.get("q") or [""])[0].strip()
-    topic = (query.get("topic") or [""])[0].strip()
+    topic = resolve_client_topic((query.get("topic") or [""])[0].strip())
     source = (query.get("source") or [""])[0].strip()
-    articles = query_articles(status="approved", q=q, topic=topic, source=source)
-    topics = get_topics()
+    date_filter = admin_date_filter_from_query(query)
+    page = parse_page(query)
+    total = count_articles(
+        status="approved",
+        q=q,
+        topic=topic,
+        source=source,
+        date_filter=date_filter,
+        canonical_topic=True,
+    )
+    page = min(page, max(1, (total + CLIENT_PAGE_SIZE - 1) // CLIENT_PAGE_SIZE))
+    articles = query_articles(
+        status="approved",
+        q=q,
+        topic=topic,
+        source=source,
+        date_filter=date_filter,
+        limit=CLIENT_PAGE_SIZE,
+        offset=(page - 1) * CLIENT_PAGE_SIZE,
+        canonical_topic=True,
+    )
+    updated_images = ensure_generated_images_for_rows(articles, limit=CLIENT_PAGE_SIZE)
+    if updated_images:
+        articles = query_articles(
+            status="approved",
+            q=q,
+            topic=topic,
+            source=source,
+            date_filter=date_filter,
+            limit=CLIENT_PAGE_SIZE,
+            offset=(page - 1) * CLIENT_PAGE_SIZE,
+            canonical_topic=True,
+        )
+    topics = get_client_topics()
     sources = get_sources(status="approved")
+    latest_active = not q and not source and not topic
+    ptit_active = topic == "Tin tức PTIT"
+    general_active = topic == "Tin tức chung"
+    quick_filters = f"""
+      <div class="client-quick-filters" aria-label="Bộ lọc nhanh">
+        <a class="quick-filter {'active' if latest_active else ''}" href="{client_filter_url(date_filter=date_filter)}">Tin mới nhất</a>
+        <a class="quick-filter {'active' if general_active else ''}" href="{client_filter_url(topic='Tin tức chung', date_filter=date_filter)}">Tin tức chung</a>
+        <a class="quick-filter {'active' if ptit_active else ''}" href="{client_filter_url(topic='Tin tức PTIT', date_filter=date_filter)}">Tin tức PTIT</a>
+      </div>
+    """
     cards = "\n".join(render_client_card(article) for article in articles)
     if not cards:
         cards = """
@@ -848,6 +1519,16 @@ def render_client_home(query):
 
     topic_options = render_select_options(topics, topic, "Tất cả chủ đề")
     source_options = render_select_options(sources, source, "Tất cả tờ báo")
+    pagination = render_pagination(
+        "/client",
+        page,
+        total,
+        CLIENT_PAGE_SIZE,
+        {"q": q, "source": source, "topic": topic, "date": date_filter or "all"},
+    )
+    today_link = client_filter_url(q, source, topic, date_filter=today_iso_date())
+    all_dates_link = client_filter_url(q, source, topic, date_filter="")
+    date_controls = render_date_filter_controls(date_filter, today_link, all_dates_link)
 
     body = f"""
     <section class="client-hero">
@@ -858,20 +1539,25 @@ def render_client_home(query):
       </div>
     </section>
     <section class="client-filter-panel">
-      <form class="filter-bar client-filter" method="get" action="/client">
+      {quick_filters}
+      <form class="filter-bar client-filter" method="get" action="/client" data-auto-submit>
         <input type="search" name="q" placeholder="Tìm tiêu đề, tóm tắt, nguồn..." value="{escape(q)}">
         <select name="source" aria-label="Lọc theo tờ báo">{source_options}</select>
         <select name="topic">{topic_options}</select>
-        <button class="button primary" type="submit">Lọc bài</button>
+        {date_controls}
       </form>
     </section>
     <section class="article-grid">{cards}</section>
+    {pagination}
     """
     return render_client_page("Client", body)
 
 
 def render_client_card(article):
     image_url = article_image_url(article)
+    link_attrs = article_link_attrs(article)
+    summary = article_display_summary(article)
+    topic_label = client_topic_label(article)
     image = (
         f'<img src="{escape(image_url)}" alt="{escape(article["title"])}" loading="lazy">'
         if image_url
@@ -879,15 +1565,18 @@ def render_client_card(article):
     )
     return f"""
     <article class="article-card">
-      <a class="article-image" href="/client/article/{article['id']}">{image}</a>
+      <a class="article-image" {link_attrs}>{image}</a>
       <div class="article-body">
-        <div class="meta-line">
-          <span>{escape(article['source'] or 'IEC')}</span>
-          <span>{escape(article['category'] or article['content_topic'] or 'Tin mới')}</span>
-        </div>
-        <h2><a href="/client/article/{article['id']}">{escape(article['title'])}</a></h2>
-        <p>{escape(article['summary'] or 'Bài viết đã được duyệt và sẵn sàng hiển thị trên trang client.')}</p>
-        <a class="text-link" href="/client/article/{article['id']}">Xem chi tiết</a>
+        <a class="article-body-link" {link_attrs}>
+          <span class="meta-line">
+            <span>{escape(article['source'] or 'IEC')}</span>
+            <span>{escape(topic_label)}</span>
+            <span>Ngày đăng: {escape(article['published_at'] or article['crawled_at'] or 'Chưa rõ')}</span>
+          </span>
+          <strong>{escape(article['title'])}</strong>
+          <span class="article-summary">{escape(summary)}</span>
+        </a>
+        <a class="text-link" {link_attrs}>Xem bài viết</a>
       </div>
     </article>
     """
@@ -908,17 +1597,21 @@ def render_article_detail(article_id):
         if article["url"]
         else ""
     )
+    title_link = article_link_attrs(article)
+    summary = article_display_summary(article)
+    topic_label = client_topic_label(article)
     body = f"""
     <article class="detail-layout">
-      <div class="detail-media">{image}</div>
+      <a class="detail-media" {title_link}>{image}</a>
       <div class="detail-content">
         <a class="text-link" href="/client">Quay lại client</a>
         <div class="meta-line">
           <span>{escape(article['source'])}</span>
-          <span>{escape(article['content_topic'] or article['category'])}</span>
+          <span>{escape(topic_label)}</span>
+          <span>Ngày đăng: {escape(article['published_at'] or article['crawled_at'] or 'Chưa rõ')}</span>
         </div>
-        <h1>{escape(article['title'])}</h1>
-        <p class="detail-summary">{escape(article['summary'] or 'Bài viết đã được duyệt và sẵn sàng hiển thị trên trang client.')}</p>
+        <h1><a {title_link}>{escape(article['title'])}</a></h1>
+        <a class="detail-summary" {title_link}>{escape(summary)}</a>
         <div class="detail-actions">{source_link}</div>
       </div>
     </article>
@@ -990,10 +1683,7 @@ def render_admin_overview_dashboard():
         <h1>Tổng quan IEC News</h1>
         <p>Theo dõi nhanh tình trạng dữ liệu tin tức, nguồn báo, chủ đề, trạng thái duyệt và hoạt động crawl.</p>
       </div>
-      <div class="admin-actions">
-        <a class="button primary" href="/admin">Duyệt bài</a>
-        <a class="button ghost" href="/admin/upload">Tải ấn phẩm</a>
-      </div>
+      {render_admin_head_actions("dashboard")}
     </section>
     <section class="dashboard-grid">{cards}</section>
     <section class="dashboard-panels">
@@ -1031,7 +1721,7 @@ def render_admin_overview_dashboard():
     <section class="dashboard-panel">
       <div class="panel-heading">
         <h2>10 bài mới crawl gần đây</h2>
-        <span>{escape(stats["latest_crawled_at"] or "Chưa có crawled_at")}</span>
+        <span>{escape(stats["latest_crawled_at"] or "Chưa có ngày đăng")}</span>
       </div>
       <div class="dashboard-table-wrap">
         <table class="dashboard-table">
@@ -1041,7 +1731,7 @@ def render_admin_overview_dashboard():
               <th>Nguồn</th>
               <th>Chủ đề</th>
               <th>Trạng thái</th>
-              <th>Crawled at</th>
+              <th>Ngày đăng</th>
               <th>Liên kết</th>
             </tr>
           </thead>
@@ -1130,7 +1820,7 @@ def render_dashboard_recent_articles(articles):
               <td>{escape(article.get('source') or 'Không rõ')}</td>
               <td>{escape(article.get('topic') or 'Chưa phân loại')}</td>
               <td><span class="badge status-{escape(normalize_status_group(status))}">{escape(STATUS_LABELS.get(status, status))}</span></td>
-              <td>{escape(article.get('crawled_at') or 'Chưa có')}</td>
+              <td>{escape(article.get('published_at') or article.get('crawled_at') or 'Chưa có')}</td>
               <td><div class="table-actions">{source_link}{admin_link}</div></td>
             </tr>
             """
@@ -1151,12 +1841,6 @@ def serialize_chat_response(response):
 
 
 def serialize_chat_article(article):
-    thumbnail = (
-        article.get("image_path")
-        or find_rendered_image(article.get("title", ""))
-        or article.get("thumbnail")
-        or ""
-    )
     return {
         "title": article.get("title", ""),
         "summary": article.get("summary", ""),
@@ -1164,7 +1848,8 @@ def serialize_chat_article(article):
         "category": article.get("category", ""),
         "content_topic": article.get("content_topic", ""),
         "url": article.get("url", ""),
-        "thumbnail": make_media_url(thumbnail),
+        "thumbnail": article_image_url(article),
+        "published_at": article.get("published_at", ""),
         "crawled_at": article.get("crawled_at", ""),
     }
 
@@ -1175,17 +1860,49 @@ def render_admin_dashboard(query):
         status = "pending"
     q = (query.get("q") or [""])[0].strip()
     source = (query.get("source") or [""])[0].strip()
-    topic = (query.get("topic") or [""])[0].strip()
+    topic = resolve_client_topic((query.get("topic") or [""])[0].strip())
+    date_filter = admin_date_filter_from_query(query)
     notice = (query.get("notice") or [""])[0].strip()
+    page = parse_page(query)
     counts = get_counts()
-    articles = query_articles(status=status, q=q, source=source, topic=topic)
+    total = count_articles(
+        status=status,
+        q=q,
+        source=source,
+        topic=topic,
+        date_filter=date_filter,
+        canonical_topic=True,
+    )
+    page = min(page, max(1, (total + ADMIN_PAGE_SIZE - 1) // ADMIN_PAGE_SIZE))
+    articles = query_articles(
+        status=status,
+        q=q,
+        source=source,
+        topic=topic,
+        date_filter=date_filter,
+        limit=ADMIN_PAGE_SIZE,
+        offset=(page - 1) * ADMIN_PAGE_SIZE,
+        canonical_topic=True,
+    )
+    updated_images = ensure_generated_images_for_rows(articles, limit=ADMIN_PAGE_SIZE)
+    if updated_images:
+        articles = query_articles(
+            status=status,
+            q=q,
+            source=source,
+            topic=topic,
+            date_filter=date_filter,
+            limit=ADMIN_PAGE_SIZE,
+            offset=(page - 1) * ADMIN_PAGE_SIZE,
+            canonical_topic=True,
+        )
     sources = get_sources()
-    topics = get_topics(status=None)
+    topics = get_client_topics(status=None)
     source_options = render_select_options(sources, source, "Tất cả tờ báo")
     topic_options = render_select_options(topics, topic, "Tất cả chủ đề")
 
     tabs = "".join(
-        f'<a class="status-tab {"active" if status == key else ""}" href="{admin_filter_url(key, q, source, topic)}">{label}<strong>{counts.get(key, 0)}</strong></a>'
+        f'<a class="status-tab {"active" if status == key else ""}" href="{admin_filter_url(key, q, source, topic, date_filter=date_filter)}">{label}<strong>{counts.get(key, 0)}</strong></a>'
         for key, label in STATUS_LABELS.items()
     )
     rows = "\n".join(render_admin_article(article) for article in articles)
@@ -1194,6 +1911,16 @@ def render_admin_dashboard(query):
 
     bulk_actions = render_bulk_actions(status)
     notice_html = f'<p class="form-success">{escape(notice)}</p>' if notice else ""
+    pagination = render_pagination(
+        "/admin",
+        page,
+        total,
+        ADMIN_PAGE_SIZE,
+        {"status": status, "q": q, "source": source, "topic": topic, "date": date_filter or "all"},
+    )
+    today_link = admin_filter_url(status, q, source, topic, date_filter=today_iso_date())
+    all_dates_link = admin_filter_url(status, q, source, topic, date_filter="")
+    date_controls = render_date_filter_controls(date_filter, today_link, all_dates_link)
 
     body = f"""
     <section class="admin-head">
@@ -1202,18 +1929,15 @@ def render_admin_dashboard(query):
         <h1>Duyệt ấn phẩm</h1>
         <p>Chọn từng bài hoặc chọn nhiều bài cùng lúc để đưa sang client, từ chối hoặc xóa khỏi hàng đợi.</p>
       </div>
-      <div class="admin-actions">
-        <a class="button ghost" href="/admin/dashboard">Xem tổng quan</a>
-        <a class="button primary" href="/admin/upload">Tải ấn phẩm</a>
-      </div>
+      {render_admin_head_actions("articles")}
     </section>
     <section class="status-tabs">{tabs}</section>
-    <form class="admin-search" method="get" action="/admin">
+    <form class="admin-search" method="get" action="/admin" data-auto-submit>
       <input type="hidden" name="status" value="{escape(status)}">
       <input type="search" name="q" placeholder="Tìm trong hàng đợi..." value="{escape(q)}">
       <select name="source" aria-label="Lọc theo tờ báo">{source_options}</select>
       <select name="topic" aria-label="Lọc theo chủ đề">{topic_options}</select>
-      <button class="button ghost" type="submit">Tìm</button>
+      {date_controls}
     </form>
     {notice_html}
     <form class="bulk-review-form" method="post" action="/admin/bulk">
@@ -1221,6 +1945,8 @@ def render_admin_dashboard(query):
       <input type="hidden" name="return_q" value="{escape(q)}">
       <input type="hidden" name="return_source" value="{escape(source)}">
       <input type="hidden" name="return_topic" value="{escape(topic)}">
+      <input type="hidden" name="return_date" value="{escape(date_filter or 'all')}">
+      <input type="hidden" name="return_page" value="{escape(page)}">
       <div class="bulk-toolbar">
         <label class="select-all-row">
           <input type="checkbox" data-select-all>
@@ -1231,12 +1957,18 @@ def render_admin_dashboard(query):
         </div>
       </div>
       <section class="admin-list">{rows}</section>
+      {pagination}
     </form>
     """
     return render_admin_page("Admin", body)
 
 
-def admin_filter_url(status, q="", source="", topic="", notice=""):
+def admin_filter_url(status, q="", source="", topic="", date_filter=None, notice="", page=1):
+    try:
+        page_number = max(1, int(page or 1))
+    except (TypeError, ValueError):
+        page_number = 1
+
     parts = [f"status={quote(status)}"]
     if q:
         parts.append(f"q={quote(q)}")
@@ -1244,6 +1976,12 @@ def admin_filter_url(status, q="", source="", topic="", notice=""):
         parts.append(f"source={quote(source)}")
     if topic:
         parts.append(f"topic={quote(topic)}")
+    if date_filter == "":
+        parts.append("date=all")
+    elif date_filter:
+        parts.append(f"date={quote(str(date_filter))}")
+    if page_number > 1:
+        parts.append(f"page={page_number}")
     if notice:
         parts.append(f"notice={quote(notice)}")
     return "/admin?" + "&".join(parts)
@@ -1255,21 +1993,17 @@ def render_bulk_actions(status):
             ("approve", "Duyệt đã chọn", "success"),
             ("reject", "Từ chối đã chọn", "ghost"),
             ("delete", "Xóa đã chọn", "danger"),
-            ("send_telegram", "Đẩy Telegram", "primary"),
         ],
         "approved": [
-            ("send_telegram", "Đẩy Telegram", "primary"),
             ("reject", "Gỡ khỏi client", "ghost"),
             ("delete", "Xóa đã chọn", "danger"),
         ],
         "rejected": [
             ("approve", "Duyệt lại", "success"),
             ("delete", "Xóa đã chọn", "danger"),
-            ("send_telegram", "Đẩy Telegram", "primary"),
         ],
         "deleted": [
             ("restore", "Khôi phục đã chọn", "ghost"),
-            ("send_telegram", "Đẩy Telegram", "primary"),
         ],
     }
     buttons = []
@@ -1278,52 +2012,71 @@ def render_bulk_actions(status):
         buttons.append(
             f'<button class="button {variant}" name="bulk_action" value="{action}" type="submit"{confirm}>{label}</button>'
         )
+    if status == "approved":
+        buttons.insert(
+            0,
+            '<button class="button primary" type="button" data-export-selected-png data-confirm-bulk="Bạn chưa chọn bài nào." disabled aria-disabled="true">Export PNG</button>',
+        )
     return "".join(buttons)
 
 
 def render_admin_article(article):
     image_url = article_image_url(article)
+    link_attrs = article_link_attrs(article)
+    click_attrs = article_click_attrs(article)
+    summary_text = article_display_summary(article, context="admin")
+    topic_label = client_topic_label(article)
     image = (
         f'<img src="{escape(image_url)}" alt="{escape(article["title"])}" loading="lazy">'
         if image_url
         else '<div class="image-fallback admin">IEC</div>'
     )
-    source_link = (
-        f'<a class="text-link" href="{escape(article["url"])}" target="_blank" rel="noopener">Bài gốc</a>'
-        if article["url"]
-        else ""
-    )
-
     approve = action_button(article["id"], "approve", "Duyệt", "success")
     reject = action_button(article["id"], "reject", "Từ chối", "ghost")
     delete = action_button(article["id"], "delete", "Xóa", "danger")
     restore = action_button(article["id"], "restore", "Khôi phục", "ghost")
+    export_png = (
+        f'<a class="button primary" href="/admin/articles/{article["id"]}/export.png" download>Export PNG</a>'
+        if article["status"] == "approved"
+        else ""
+    )
 
     actions = {
         "pending": approve + reject + delete,
-        "approved": reject + delete,
+        "approved": export_png + reject + delete,
         "rejected": approve + delete,
         "deleted": restore,
     }.get(article["status"], approve + delete)
+    date_items = [
+        f"Ngày đăng: {escape(article['published_at'] or article['crawled_at'] or 'Chưa rõ')}",
+        f"Crawl: {escape(article['crawled_at'] or 'Chưa rõ')}",
+        f"Cập nhật: {escape(article['updated_at'] or 'Chưa rõ')}",
+    ]
+    if article["approved_at"]:
+        date_items.append(f"Duyệt ngày: {escape(article['approved_at'])}")
+    elif article["reviewed_at"] and article["status"] == "rejected":
+        date_items.append(f"Từ chối ngày: {escape(article['reviewed_at'])}")
+    if article["deleted_at"]:
+        date_items.append(f"Xóa ngày: {escape(article['deleted_at'])}")
+    date_line = "".join(f"<span>{item}</span>" for item in date_items)
 
     return f"""
     <article class="review-item">
       <label class="review-check" title="Chọn bài này">
         <input type="checkbox" name="article_ids" value="{article['id']}" data-row-check>
       </label>
-      <div class="review-image">{image}</div>
+      <a class="review-image" {link_attrs}>{image}</a>
       <div class="review-content">
         <div class="meta-line">
           <span>{escape(article['source'] or 'Admin')}</span>
-          <span>{escape(article['category'] or article['content_topic'] or 'Chưa phân loại')}</span>
+          <span>{escape(topic_label or 'Chưa phân loại')}</span>
           <span class="badge">{escape(STATUS_LABELS.get(article['status'], article['status']))}</span>
         </div>
-        <h2>{escape(article['title'])}</h2>
-        <p>{escape(article['summary'] or 'Bài này chưa có tóm tắt. Admin có thể duyệt để demo client hoặc bổ sung nội dung ở bước phát triển tiếp theo.')}</p>
-        <div class="review-foot">
-          {source_link}
-          <span>Cập nhật: {escape(article['updated_at'])}</span>
+        <div class="review-click-zone" {click_attrs}>
+          <h2><a class="review-title-link" {link_attrs}>{escape(article['title'])}</a></h2>
+          <p><a class="review-summary-link" {link_attrs}>{escape(summary_text)}</a></p>
         </div>
+        <div class="date-line">{date_line}</div>
       </div>
       <div class="review-actions">{actions}</div>
     </article>
@@ -1336,6 +2089,31 @@ def action_button(article_id, action, label, variant):
     """
 
 
+def auto_send_telegram_notice(article_ids):
+    try:
+        result = NotificationService(DB_PATH).send_selected_articles_to_telegram(article_ids)
+        return (
+            "Telegram tự động: gửi thành công "
+            f"{result['sent']} bài, bỏ qua {result['skipped']} bài, lỗi {result['failed']} bài."
+        )
+    except Exception as exc:
+        return f"Telegram tự động: chưa gửi được ({str(exc)[:180]})."
+
+
+def auto_send_telegram_notice_background(article_ids):
+    clean_ids = [int(article_id) for article_id in article_ids or [] if str(article_id).isdigit()]
+    if not clean_ids:
+        return ""
+
+    def worker():
+        notice = auto_send_telegram_notice(clean_ids)
+        print(f"[INFO] {notice}")
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    return "Telegram tự động: đang gửi nền."
+
+
 def render_upload_form(error="", success=""):
     error_html = f'<p class="form-error">{escape(error)}</p>' if error else ""
     success_html = f'<p class="form-success">{escape(success)}</p>' if success else ""
@@ -1346,7 +2124,7 @@ def render_upload_form(error="", success=""):
         <h1>Tải ấn phẩm mới</h1>
         <p>Mỗi ảnh upload sẽ đi vào hàng đợi duyệt. Nếu chọn đăng ngay, bài sẽ xuất hiện trên client lập tức.</p>
       </div>
-      <a class="button ghost" href="/admin">Về admin</a>
+      {render_admin_head_actions("upload")}
     </section>
     <form class="upload-form" method="post" action="/admin/upload" enctype="multipart/form-data">
       {error_html}
@@ -1463,6 +2241,8 @@ class CMSHandler(BaseHTTPRequestHandler):
             self.redirect("/admin/dashboard")
         elif path == "/admin/upload":
             self.require_admin(lambda: self.respond_html(render_upload_form()))
+        elif re.fullmatch(r"/admin/articles/\d+/export\.png", path):
+            self.require_admin(lambda: self.handle_article_export(path))
         elif path == "/api/chat/suggestions":
             self.respond_json({"suggestions": CHAT_SUGGESTIONS})
         elif path.startswith("/api/articles"):
@@ -1518,15 +2298,18 @@ class CMSHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def handle_upload(self):
+        success = "Đã lưu ấn phẩm vào hệ thống."
         try:
             content_type = self.headers.get("Content-Type", "")
             body = self.read_body()
             fields, files = parse_multipart(body, content_type)
-            create_uploaded_article(fields, files.get("image"))
+            article_id, status = create_uploaded_article(fields, files.get("image"))
+            if status == "approved":
+                success += " " + auto_send_telegram_notice([article_id])
         except ValueError as exc:
             self.respond_html(render_upload_form(error=str(exc)), HTTPStatus.BAD_REQUEST)
             return
-        self.respond_html(render_upload_form(success="Đã lưu ấn phẩm vào hệ thống."))
+        self.respond_html(render_upload_form(success=success))
 
     def handle_bulk_action(self):
         fields = self.read_form_multi()
@@ -1540,6 +2323,9 @@ class CMSHandler(BaseHTTPRequestHandler):
         return_q = (fields.get("return_q") or [""])[0].strip()
         return_source = (fields.get("return_source") or [""])[0].strip()
         return_topic = (fields.get("return_topic") or [""])[0].strip()
+        return_date_raw = (fields.get("return_date") or [today_iso_date()])[0].strip()
+        return_date = "" if return_date_raw == "all" else return_date_raw
+        return_page = (fields.get("return_page") or ["1"])[0].strip()
 
         single_action = (fields.get("single_action") or [""])[0]
         if single_action:
@@ -1549,21 +2335,33 @@ class CMSHandler(BaseHTTPRequestHandler):
             action = (fields.get("bulk_action") or [""])[0]
             article_ids = fields.get("article_ids", [])
 
-        notice = ""
-        if action == "send_telegram" and article_ids:
-            try:
-                result = NotificationService(DB_PATH).send_selected_articles_to_telegram(article_ids)
-                notice = (
-                    "Telegram: gửi thành công "
-                    f"{result['sent']} bài, bỏ qua {result['skipped']} bài, lỗi {result['failed']} bài."
-                )
-            except Exception as exc:
-                notice = f"Telegram: không gửi được bài đã chọn ({str(exc)[:180]})."
-        elif action in status_map and article_ids:
-            set_articles_status(article_ids, status_map[action])
-            return_status = "pending" if action == "restore" else status_map[action]
+        clean_ids = []
+        seen_ids = set()
+        for raw_id in article_ids:
+            if str(raw_id).isdigit():
+                article_id = int(raw_id)
+                if article_id not in seen_ids:
+                    clean_ids.append(article_id)
+                    seen_ids.add(article_id)
 
-        self.redirect(admin_filter_url(return_status, return_q, return_source, return_topic, notice))
+        notice = ""
+        if action in status_map and clean_ids:
+            set_articles_status(clean_ids, status_map[action])
+            return_status = "pending" if action == "restore" else status_map[action]
+            if action == "approve":
+                notice = auto_send_telegram_notice_background(clean_ids)
+
+        self.redirect(
+            admin_filter_url(
+                return_status,
+                return_q,
+                return_source,
+                return_topic,
+                date_filter=return_date,
+                notice=notice,
+                page=return_page,
+            )
+        )
 
     def handle_article_action(self, path):
         match = re.fullmatch(r"/admin/articles/(\d+)/(approve|reject|delete|restore)", path)
@@ -1580,7 +2378,39 @@ class CMSHandler(BaseHTTPRequestHandler):
         }
         set_article_status(article_id, status_map[action])
         target_status = "pending" if action == "restore" else status_map[action]
-        self.redirect(f"/admin?status={target_status}")
+        notice = auto_send_telegram_notice_background([article_id]) if action == "approve" else ""
+        self.redirect(admin_filter_url(target_status, notice=notice))
+
+    def handle_article_export(self, path):
+        match = re.fullmatch(r"/admin/articles/(\d+)/export\.png", path)
+        if not match:
+            self.respond_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+
+        article_id = int(match.group(1))
+        article = get_article(article_id)
+        target = resolve_article_export_image(article)
+        if not target:
+            self.respond_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+
+        output = io.BytesIO()
+        try:
+            with Image.open(target) as image:
+                image.save(output, format="PNG")
+        except Exception as exc:
+            print(f"[WARN] Khong export duoc PNG cho bai #{article_id}: {exc}")
+            self.respond_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+
+        payload = output.getvalue()
+        filename = f"iec-news-{article_id}-{slugify(article['title'])}.png"
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
 
     def handle_chat_api(self):
         try:
@@ -1628,7 +2458,9 @@ class CMSHandler(BaseHTTPRequestHandler):
                 "content_topic": row["content_topic"],
                 "image": article_image_url(row),
                 "url": row["url"],
-                "published_at": row["reviewed_at"] or row["updated_at"],
+                "published_at": row["published_at"] or row["reviewed_at"] or row["updated_at"],
+                "approved_at": row["approved_at"] or row["reviewed_at"],
+                "deleted_at": row["deleted_at"],
             }
             for row in rows
         ]

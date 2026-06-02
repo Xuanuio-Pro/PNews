@@ -81,6 +81,7 @@ class TelegramNotifier:
         summary = article.get("summary") or "Chưa có tóm tắt."
         source = article.get("source") or "IEC News"
         url = article.get("url") or ""
+        published_at = article.get("published_at") or article.get("crawled_at") or ""
 
         safe_category = html.escape(self._trim(category, 120))
         safe_topic = html.escape(self._trim(topic, 120))
@@ -88,6 +89,8 @@ class TelegramNotifier:
         safe_summary = html.escape(self._trim(summary, max_summary_chars))
         safe_source = html.escape(self._trim(source, 160))
         safe_url = html.escape(self._trim(url, 900), quote=True)
+        safe_published_at = html.escape(self._trim(published_at, 80))
+        published_line = f"🗓 Ngày đăng: {safe_published_at}\n" if safe_published_at else ""
 
         return (
             f"📰 IEC News | {safe_category}\n\n"
@@ -95,6 +98,7 @@ class TelegramNotifier:
             f"📝 Tóm tắt:\n"
             f"{safe_summary}\n\n"
             f"📌 Nguồn: {safe_source}\n"
+            f"{published_line}"
             f"🏷 Chủ đề: {safe_topic}\n"
             f"🔗 Đọc bài viết: {safe_url}"
         )

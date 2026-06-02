@@ -1,39 +1,30 @@
+import re
 from datetime import datetime
 from urllib.parse import urlparse
 
 from crawlers.base import clean_text, extract_image_url, extract_published_at, make_soup, normalize_url
 
 
-SOURCE = "VNExpress"
-BASE_URL = "https://vnexpress.net/"
-
-VNEXPRESS_CATEGORIES = {
-    "Khoa học - Công nghệ": {
-        "url": "https://vnexpress.net/khoa-hoc-cong-nghe",
-        "content_topic": "Khoa học - Công nghệ",
-    },
-    "Giáo dục": {
-        "url": "https://vnexpress.net/giao-duc",
-        "content_topic": "Giáo dục",
-    },
-}
+SOURCE = "Báo Chính phủ"
+BASE_URL = "https://baochinhphu.vn/"
+CATEGORY = "Khoa giáo - Khoa học công nghệ"
+CONTENT_TOPIC = "Khoa học - Giáo dục"
+LIST_URL = "https://baochinhphu.vn/khoa-giao/khoa-hoc-cong-nghe.htm"
 
 
-def parse_article_block(block, category, content_topic, crawled_at):
+def parse_article_block(block, crawled_at):
     title_tag = block.select_one(
-        "h3.title-news a[href], "
-        "h2.title-news a[href], "
-        "h4.title-news a[href], "
-        ".title-news a[href]"
+        "h1 a[href], h2 a[href], h3 a[href], h4 a[href], "
+        ".title a[href], .news-title a[href], .story-title a[href]"
     )
 
     if not title_tag:
         title_tag = _best_article_link(block.select("a[href]"))
 
-    return parse_article_link(title_tag, block, category, content_topic, crawled_at)
+    return parse_article_link(title_tag, block, crawled_at)
 
 
-def parse_article_link(title_tag, block, category, content_topic, crawled_at):
+def parse_article_link(title_tag, block, crawled_at):
     if not title_tag:
         return None
 
@@ -56,19 +47,20 @@ def parse_article_link(title_tag, block, category, content_topic, crawled_at):
         "thumbnail": thumbnail,
         "summary": summary,
         "summary_source": "crawler" if summary else "pending",
-        "newspaper_type": "Báo điện tử",
-        "content_topic": content_topic,
-        "category": category,
+        "newspaper_type": "Cổng thông tin Chính phủ",
+        "content_topic": CONTENT_TOPIC,
+        "category": CATEGORY,
     }
 
 
 def extract_summary(block, title):
     selectors = [
-        "p.description a",
-        "p.description",
-        ".description a",
+        ".summary",
+        ".sapo",
+        ".desc",
         ".description",
-        ".lead",
+        ".news-desc",
+        ".story-desc",
         "p",
     ]
 
@@ -78,19 +70,18 @@ def extract_summary(block, title):
             continue
 
         summary = clean_text(summary_tag.get_text(" ", strip=True))
-        if summary and summary != title:
+        if summary and summary != title and len(summary) >= 20:
             return summary
 
     return ""
 
 
-def crawl_category(category, info):
-    url = info["url"]
-    content_topic = info["content_topic"]
-    soup = make_soup(url)
+def crawl_baochinhphu():
+    print(f"  - Báo Chính phủ/{CATEGORY}")
+    soup = make_soup(LIST_URL)
 
     if soup is None:
-        print(f"[WARN] VNExpress/{category}: không tải được HTML.")
+        print("[WARN] Báo Chính phủ: không tải được HTML.")
         return []
 
     crawled_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -98,46 +89,39 @@ def crawl_category(category, info):
     seen_urls = set()
 
     block_selectors = [
-        "article.item-news",
-        ".item-news",
-        ".list-news-subfolder article",
-        ".box-category-item",
+        ".list__main .box-category-item",
+        ".list__main .box-category-item-sub",
+        ".list__lmain .box-stream-item",
     ]
 
     for selector in block_selectors:
         for block in soup.select(selector):
-            article = parse_article_block(block, category, content_topic, crawled_at)
+            article = parse_article_block(block, crawled_at)
             _append_unique(articles, seen_urls, article)
 
     if len(articles) < 5:
         for title_tag in soup.select(
-            "h3.title-news a[href], h2.title-news a[href], h4.title-news a[href]"
+            ".list__main h2 a[href], "
+            ".list__main h3 a[href], "
+            ".list__lmain h2 a[href], "
+            ".list__lmain h3 a[href]"
         ):
             block = _nearest_article_block(title_tag)
-            article = parse_article_link(title_tag, block, category, content_topic, crawled_at)
+            article = parse_article_link(title_tag, block, crawled_at)
             _append_unique(articles, seen_urls, article)
 
     if not articles:
-        print(f"[WARN] VNExpress/{category}: lấy được 0 bài. Cần kiểm tra selector.")
-
-    return articles
-
-
-def crawl_vnexpress():
-    articles = []
-
-    for category, info in VNEXPRESS_CATEGORIES.items():
-        print(f"  - VNExpress/{category}")
-        articles.extend(crawl_category(category, info))
+        print("[WARN] Báo Chính phủ: lấy được 0 bài. Cần kiểm tra selector.")
 
     return articles
 
 
 def _nearest_article_block(tag):
     for parent in tag.parents:
-        classes = parent.get("class") or []
-        class_text = " ".join(classes)
-        if parent.name == "article" or "item-news" in class_text:
+        classes = " ".join(parent.get("class") or [])
+        if parent.name in {"article", "li"}:
+            return parent
+        if any(marker in classes for marker in ("item", "news", "story", "list")):
             return parent
     return tag.parent or tag
 
@@ -152,14 +136,17 @@ def _best_article_link(links):
 
 
 def _is_valid_article(title, url):
-    if not title or not url or len(title) < 10:
+    if not title or not url or len(title) < 15:
+        return False
+
+    if url.rstrip("/") == LIST_URL.rstrip("/"):
         return False
 
     parsed = urlparse(url)
-    if "vnexpress.net" not in parsed.netloc:
+    if "baochinhphu.vn" not in parsed.netloc:
         return False
 
-    return parsed.path.endswith(".html")
+    return bool(re.search(r"-\d{8,}\.htm$", parsed.path))
 
 
 def _append_unique(articles, seen_urls, article):

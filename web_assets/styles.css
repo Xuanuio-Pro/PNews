@@ -135,6 +135,27 @@ h3 {
   color: var(--blue);
 }
 
+.button:disabled,
+.button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.45;
+  box-shadow: none;
+}
+
+.button:disabled:hover,
+.button[aria-disabled="true"]:hover {
+  border-color: var(--line);
+  background: #fff;
+  color: var(--ink);
+}
+
+.button.primary:disabled:hover,
+.button.primary[aria-disabled="true"]:hover {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #fff;
+}
+
 .button.full {
   width: 100%;
 }
@@ -184,6 +205,25 @@ textarea:focus {
   color: var(--muted);
   font-size: 13px;
   font-weight: 750;
+}
+
+.date-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 12px 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.date-line span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #f2f6f8;
 }
 
 .badge {
@@ -274,9 +314,42 @@ code {
   margin-bottom: 22px;
 }
 
+.client-quick-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.quick-filter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font-weight: 850;
+  box-shadow: 0 8px 22px rgba(28, 42, 58, 0.06);
+}
+
+.quick-filter:hover,
+.quick-filter:focus-visible {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.quick-filter.active {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #fff;
+}
+
 .filter-bar {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) minmax(150px, 210px) minmax(150px, 210px) auto;
+  grid-template-columns: minmax(220px, 1fr) minmax(145px, 190px) minmax(145px, 190px) minmax(145px, 180px) auto;
   align-items: center;
   gap: 10px;
   padding: 12px;
@@ -294,6 +367,46 @@ code {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 18px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 22px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.pagination div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.page-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 38px;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+}
+
+.page-link.active {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #fff;
 }
 
 .article-card {
@@ -322,14 +435,27 @@ code {
   padding: 17px;
 }
 
-.article-card h2 {
+.article-body-link {
+  display: block;
+  color: inherit;
+}
+
+.article-body-link:hover strong,
+.article-body-link:focus-visible strong {
+  color: var(--blue);
+}
+
+.article-body-link strong {
+  display: block;
   min-height: 58px;
   margin-bottom: 10px;
   font-size: 20px;
   line-height: 1.25;
+  color: var(--ink);
+  transition: color 160ms ease;
 }
 
-.article-card p {
+.article-summary {
   display: -webkit-box;
   min-height: 69px;
   margin-bottom: 14px;
@@ -373,6 +499,7 @@ code {
 }
 
 .detail-summary {
+  display: block;
   color: var(--ink);
   font-size: 20px;
 }
@@ -735,6 +862,58 @@ code {
   padding: 28px 0 54px;
 }
 
+.admin-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: none;
+  place-items: center;
+  padding: 18px;
+  background: rgba(16, 24, 33, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.admin-loading-overlay.is-visible {
+  display: grid;
+}
+
+.admin-loading-card {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  min-width: min(94vw, 430px);
+  padding: 22px 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  box-shadow: 0 20px 54px rgba(28, 42, 58, 0.23);
+  text-align: center;
+}
+
+.admin-loading-card strong {
+  font-size: 19px;
+}
+
+.admin-loading-card p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.admin-loading-spinner {
+  width: 38px;
+  height: 38px;
+  border: 3px solid #d8e3ec;
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: adminSpin 0.9s linear infinite;
+}
+
+@keyframes adminSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .admin-head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -795,13 +974,25 @@ code {
 
 .admin-search {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(160px, 210px) minmax(160px, 210px) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 190px) minmax(150px, 190px) minmax(150px, 180px) auto;
   gap: 10px;
   padding: 12px;
   margin-bottom: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--paper);
+}
+
+.date-filter-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.date-filter-actions .button.active {
+  border-color: var(--blue);
+  color: var(--blue);
+  box-shadow: inset 0 0 0 1px var(--blue);
 }
 
 .bulk-review-form {
@@ -873,10 +1064,36 @@ code {
 }
 
 .review-image {
+  display: block;
   overflow: hidden;
   aspect-ratio: 4 / 5;
   border-radius: 7px;
   background: #e7eef3;
+}
+
+.review-title-link,
+.review-summary-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.review-title-link:hover,
+.review-summary-link:hover {
+  text-decoration: underline;
+}
+
+.review-click-zone[data-article-url] {
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.review-click-zone[data-article-url]:focus-visible {
+  outline: 3px solid rgba(15, 98, 137, 0.28);
+  outline-offset: 4px;
+}
+
+.review-click-zone[data-article-url]:hover .review-title-link {
+  color: var(--blue);
 }
 
 .review-content h2 {
@@ -1294,9 +1511,14 @@ code {
 
   .panel-heading,
   .metric-row div,
-  .status-row {
+  .status-row,
+  .pagination {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .pagination div {
+    justify-content: flex-start;
   }
 
   .bulk-actions,

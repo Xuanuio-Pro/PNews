@@ -13,6 +13,7 @@ OUTPUT_COLUMNS = [
     "title",
     "url",
     "crawled_at",
+    "published_at",
     "thumbnail",
     "summary",
     "summary_source",
@@ -52,6 +53,18 @@ def remove_duplicates(articles):
 
 def to_dataframe(articles):
     return pd.DataFrame(articles, columns=OUTPUT_COLUMNS)
+
+
+def sort_articles_by_published_at(articles):
+    return sorted(
+        articles,
+        key=lambda article: (
+            str(article.get("published_at") or ""),
+            str(article.get("crawled_at") or ""),
+            str(article.get("url") or ""),
+        ),
+        reverse=True,
+    )
 
 
 def read_articles_csv(path):
@@ -120,9 +133,30 @@ def split_new_articles(articles, master_path="data/master/master_articles.csv"):
     return remove_duplicates(new_articles), master_articles
 
 
-def update_master_articles(new_articles, master_path="data/master/master_articles.csv"):
+def update_master_articles(new_articles, master_path="data/master/master_articles.csv", latest_articles=None):
     master_articles = read_articles_csv(master_path)
-    merged_articles = remove_duplicates(master_articles + new_articles)
+    latest_by_url = {
+        article.get("url"): article
+        for article in (latest_articles or [])
+        if article.get("url")
+    }
+    merged_articles = []
+
+    for article in master_articles:
+        url = article.get("url")
+        latest = latest_by_url.get(url)
+
+        if latest:
+            updated_article = dict(article)
+            for column in OUTPUT_COLUMNS:
+                latest_value = latest.get(column)
+                if latest_value not in (None, ""):
+                    updated_article[column] = latest_value
+            merged_articles.append(updated_article)
+        else:
+            merged_articles.append(article)
+
+    merged_articles = remove_duplicates(merged_articles + new_articles)
     save_all_articles(merged_articles, master_path)
     return merged_articles
 

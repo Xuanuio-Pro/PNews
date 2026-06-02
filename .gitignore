@@ -19,7 +19,9 @@ logs/
 *.log
 data/*.csv
 data/*.sqlite3
+data/*.sqlite3-*
 data/*.db
+data/*.db-*
 data/generated_images/
 data/thumbnails/
 data/summaries/

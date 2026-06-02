@@ -21,8 +21,12 @@ APPROVED_STATUS_ALIASES = {
 
 
 def connect_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA temp_store=MEMORY")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -94,8 +98,8 @@ def detect_article_hints(message):
 
     source_aliases = {
         "VNExpress": ("vnexpress", "vn express", "vnex"),
-        "Dân trí": ("dan tri", "dantri", "dan tri"),
-        "24h": ("24h", "24 h"),
+        "Báo Chính phủ": ("bao chinh phu", "chinh phu"),
+        "PTIT": ("ptit", "hoc vien cong nghe buu chinh vien thong"),
     }
     for label, aliases in source_aliases.items():
         if any(_contains_alias(normalized, alias) for alias in aliases):
@@ -203,6 +207,7 @@ def _fetch_public_rows(conn, columns, limit):
             "image_path",
             "summary",
             "crawled_at",
+            "published_at",
             "newspaper_type",
             "content_topic",
             "category",
@@ -224,6 +229,9 @@ def _fetch_public_rows(conn, columns, limit):
         where.append(f"LOWER(TRIM(status)) IN ({placeholders})")
 
     order_parts = []
+    if "published_at" in columns:
+        order_parts.append("datetime(NULLIF(published_at, '')) DESC")
+        order_parts.append("NULLIF(published_at, '') DESC")
     if "crawled_at" in columns:
         order_parts.append("datetime(NULLIF(crawled_at, '')) DESC")
         order_parts.append("NULLIF(crawled_at, '') DESC")
@@ -255,7 +263,8 @@ def _article_from_row(row, columns):
         "url": data.get("url", ""),
         "thumbnail": thumbnail,
         "image_path": rendered_image,
-        "crawled_at": data.get("crawled_at") or data.get("created_at") or data.get("updated_at") or "",
+        "published_at": data.get("published_at") or "",
+        "crawled_at": data.get("published_at") or data.get("crawled_at") or data.get("created_at") or data.get("updated_at") or "",
         "status": data.get("status", ""),
     }
 

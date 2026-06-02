@@ -405,6 +405,25 @@ def _content_selectors(source_lower):
             ".sidebar-1",
         ]
 
+    if "báo chính phủ" in source_lower or "baochinhphu" in source_lower:
+        return [
+            ".detail-content",
+            ".detail-news",
+            ".content-news-detail",
+            ".news-detail",
+            "article",
+            "main",
+        ]
+
+    if "ptit" in source_lower:
+        return [
+            ".entry-content",
+            ".post-content",
+            ".elementor-widget-theme-post-content",
+            "article",
+            "main",
+        ]
+
     if "dân trí" in source_lower or "dantri" in source_lower:
         return [
             ".singular-content",
