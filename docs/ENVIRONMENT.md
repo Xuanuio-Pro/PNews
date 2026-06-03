@@ -21,7 +21,7 @@ Hệ thống PNews sử dụng các biến môi trường để nạp cấu hìn
 
 | Tên biến | Kiểu dữ liệu | Định dạng ví dụ | Vai trò / Mô tả | Bắt buộc |
 | :--- | :---: | :---: | :--- | :---: |
-| `PNEWS_ADMIN_ACCOUNTS`| JSON String | `{"admin":"PNews@3.6","user1":"pass123"}` | Danh sách tài khoản admin CMS dưới dạng JSON key-value. Cho phép cấu hình nhiều tài khoản cùng lúc. | **Có** |
+| `PNEWS_ADMIN_ACCOUNTS`| JSON String | `{"admin":"your_strong_password"}` | Danh sách tài khoản admin CMS dưới dạng JSON key-value. Cho phép cấu hình nhiều tài khoản cùng lúc. | **Có** |
 
 ---
 
@@ -40,7 +40,7 @@ Hệ thống PNews sử dụng các biến môi trường để nạp cấu hìn
 | Tên biến | Kiểu dữ liệu | Vai trò / Mô tả | Bắt buộc |
 | :--- | :---: | :--- | :---: |
 | `TELEGRAM_BOT_TOKEN` | String | HTTP API Token nhận được từ BotFather để gửi thông báo tin tức. | Chỉ khi dùng Telegram |
-| `TELEGRAM_CHAT_ID` | String | ID của Channel hoặc Group nhận thông báo tự động (Ví dụ: `-100123456789`). | Chỉ khi dùng Telegram |
+| `TELEGRAM_CHAT_ID` | String | ID của Channel hoặc Group nhận thông báo tự động. | Chỉ khi dùng Telegram |
 
 ---
 
@@ -65,18 +65,18 @@ PNEWS_LOG_DIR=logs
 PNEWS_DATABASE_PATH=data/cms.sqlite3
 
 # Tài khoản Admin đăng nhập CMS
-PNEWS_ADMIN_ACCOUNTS={"admin":"PNews@ProductionPass","Xuanuio":"Xuanuio@PrivatePass"}
+PNEWS_ADMIN_ACCOUNTS={"admin":"replace_with_a_strong_password"}
 
 # Facebook Page Config
-FACEBOOK_PAGE_ID=1125561007309586
-FACEBOOK_PAGE_ACCESS_TOKEN=EAAfIXMJw66c...
+FACEBOOK_PAGE_ID=your_facebook_page_id
+FACEBOOK_PAGE_ACCESS_TOKEN=your_facebook_page_access_token
 FACEBOOK_GRAPH_API_VERSION=v25.0
 
 # Telegram Channel Config
-TELEGRAM_BOT_TOKEN=1234567890:ABCdefGhIJKlmNoPQRsTUVwxyZ
-TELEGRAM_CHAT_ID=-100987654321
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_CHAT_ID=your_telegram_chat_id
 
 # AI API Keys
-GEMINI_API_KEY=AIzaSy...
-GROQ_API_KEY=gsk_...
+GEMINI_API_KEY=your_gemini_api_key
+GROQ_API_KEY=your_groq_api_key
 ```

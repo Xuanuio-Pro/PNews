@@ -1,17 +1,20 @@
 import json
+import logging
 import re
 from collections import Counter
-from pathlib import Path
 from time import sleep
 
 import requests
 from bs4 import BeautifulSoup
 
 from crawlers.base import HEADERS, clean_text
+from config.settings import DATA_DIR
 from services.config import get_config_value, get_int_config_value
 
 
-SUMMARY_CACHE_PATH = Path("data/summaries/summary_cache.json")
+LOGGER = logging.getLogger(__name__)
+
+SUMMARY_CACHE_PATH = DATA_DIR / "summaries" / "summary_cache.json"
 REQUEST_TIMEOUT = get_int_config_value("SUMMARY_REQUEST_TIMEOUT", 25)
 MIN_SUMMARY_LENGTH = get_int_config_value("MIN_SUMMARY_LENGTH", 30)
 MAX_CONTENT_CHARS = get_int_config_value("MAX_CONTENT_CHARS", 6000)
@@ -72,11 +75,11 @@ def enrich_missing_summaries(articles, max_missing=None, force_ai=False):
             continue
 
         processed_missing += 1
-        print(
-            f"[INFO] Enrich summary {processed_missing}"
-            f"{f'/{max_missing}' if max_missing is not None else ''}: "
-            f"{article.get('title', '')[:90]}",
-            flush=True,
+        LOGGER.info(
+            "Enrich summary %s%s: %s",
+            processed_missing,
+            f"/{max_missing}" if max_missing is not None else "",
+            article.get("title", "")[:90],
         )
 
         content = fetch_article_content(url, article.get("source", ""))
@@ -107,11 +110,10 @@ def fetch_article_content(url, source=""):
         return ""
 
     try:
-        response = session.get(url, timeout=REQUEST_TIMEOUT)
+        response = _get_with_retry(url)
         response.encoding = response.apparent_encoding or "utf-8"
-        response.raise_for_status()
     except requests.RequestException as exc:
-        print(f"[WARN] Không tải được nội dung bài viết {url}: {exc}")
+        LOGGER.warning("Không tải được nội dung bài viết %s: %s", url, exc)
         return ""
 
     return extract_article_text(response.text, source)
@@ -220,7 +222,7 @@ def summarize_with_gemini(title, content):
         return _normalize_summary(text)
     except Exception as exc:
         _record_provider_failure("gemini", exc)
-        print(f"[WARN] Gemini summary lỗi: {_safe_error_message(exc)}")
+        LOGGER.warning("Gemini summary lỗi: %s", _safe_error_message(exc))
         return ""
 
 
@@ -262,7 +264,7 @@ def summarize_with_groq(title, content):
         return _normalize_summary(text)
     except Exception as exc:
         _record_provider_failure("groq", exc)
-        print(f"[WARN] Groq summary lỗi: {_safe_error_message(exc)}")
+        LOGGER.warning("Groq summary lỗi: %s", _safe_error_message(exc))
         return ""
 
 
@@ -304,19 +306,20 @@ def _record_provider_failure(provider, exc):
 
     if _is_rate_limited_error(exc):
         disabled_providers.add(provider)
-        print(
-            f"[WARN] Tạm bỏ qua {provider} trong lần chạy này do bị rate limit: "
-            f"{_safe_error_message(exc)}",
-            flush=True,
+        LOGGER.warning(
+            "Tạm bỏ qua %s trong lần chạy này do bị rate limit: %s",
+            provider,
+            _safe_error_message(exc),
         )
         return
 
     if provider_failures[provider] >= PROVIDER_DISABLE_AFTER_FAILURES:
         disabled_providers.add(provider)
-        print(
-            f"[WARN] Tạm bỏ qua {provider} trong lần chạy này sau "
-            f"{provider_failures[provider]} lỗi liên tiếp: {_safe_error_message(exc)}",
-            flush=True,
+        LOGGER.warning(
+            "Tạm bỏ qua %s trong lần chạy này sau %s lỗi liên tiếp: %s",
+            provider,
+            provider_failures[provider],
+            _safe_error_message(exc),
         )
 
 
@@ -356,9 +359,44 @@ def _post_json_with_retry(provider, url, params=None, headers=None, json_payload
             if _is_rate_limited_error(exc):
                 raise
 
-            print(
-                f"[WARN] {provider} tạm lỗi ({_safe_error_message(exc)}), "
-                f"thử lại {attempt + 1}/{API_RETRY_ATTEMPTS}..."
+            LOGGER.warning(
+                "%s tạm lỗi (%s), thử lại %s/%s...",
+                provider,
+                _safe_error_message(exc),
+                attempt + 1,
+                API_RETRY_ATTEMPTS,
+            )
+            sleep(API_RETRY_DELAY_SECONDS * attempt)
+
+    raise last_error
+
+
+def _get_with_retry(url):
+    last_error = None
+
+    for attempt in range(1, API_RETRY_ATTEMPTS + 1):
+        try:
+            response = session.get(url, timeout=REQUEST_TIMEOUT)
+
+            if response.status_code in {429, 500, 502, 503, 504}:
+                raise requests.HTTPError(
+                    f"{response.status_code} {response.reason}",
+                    response=response,
+                )
+
+            response.raise_for_status()
+            return response
+        except requests.RequestException as exc:
+            last_error = exc
+
+            if attempt == API_RETRY_ATTEMPTS or not _is_retryable_error(exc):
+                raise
+
+            LOGGER.warning(
+                "Tạm lỗi khi tải nội dung bài viết (%s), thử lại %s/%s...",
+                _safe_error_message(exc),
+                attempt + 1,
+                API_RETRY_ATTEMPTS,
             )
             sleep(API_RETRY_DELAY_SECONDS * attempt)
 
@@ -394,7 +432,7 @@ def _print_enrichment_stats(stats):
         f"{source}={count}"
         for source, count in sorted(stats.items())
     )
-    print(f"[OK] Summary enrichment: total={total}; {details}")
+    LOGGER.info("Summary enrichment: total=%s; %s", total, details)
 
 
 def _content_selectors(source_lower):

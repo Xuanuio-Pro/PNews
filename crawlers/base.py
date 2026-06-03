@@ -1,3 +1,4 @@
+import logging
 import re
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -9,6 +10,8 @@ import requests
 from bs4 import BeautifulSoup
 
 
+LOGGER = logging.getLogger(__name__)
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -19,6 +22,8 @@ HEADERS = {
 
 REQUEST_TIMEOUT = 15
 REQUEST_DELAY_SECONDS = 0.2
+REQUEST_RETRY_ATTEMPTS = 3
+REQUEST_RETRY_BACKOFF_SECONDS = 1
 
 DATETIME_META_SELECTORS = [
     "meta[property='article:published_time']",
@@ -48,15 +53,53 @@ session.headers.update(HEADERS)
 
 
 def get_html(url):
-    try:
-        sleep(REQUEST_DELAY_SECONDS)
-        response = session.get(url, timeout=REQUEST_TIMEOUT)
-        response.encoding = response.apparent_encoding or "utf-8"
-        response.raise_for_status()
-        return response.text
-    except requests.RequestException as exc:
-        print(f"[ERROR] Không lấy được HTML từ {url}: {exc}")
-        return None
+    last_error = None
+
+    for attempt in range(1, REQUEST_RETRY_ATTEMPTS + 1):
+        try:
+            sleep(REQUEST_DELAY_SECONDS)
+            response = session.get(url, timeout=REQUEST_TIMEOUT)
+            response.encoding = response.apparent_encoding or "utf-8"
+
+            if response.status_code in {429, 500, 502, 503, 504}:
+                raise requests.HTTPError(
+                    f"{response.status_code} {response.reason}",
+                    response=response,
+                )
+
+            response.raise_for_status()
+            return response.text
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt >= REQUEST_RETRY_ATTEMPTS or not _is_retryable_error(exc):
+                break
+            LOGGER.warning(
+                "Tạm lỗi khi lấy HTML từ %s (%s), thử lại %s/%s",
+                url,
+                _safe_error_message(exc),
+                attempt + 1,
+                REQUEST_RETRY_ATTEMPTS,
+            )
+            sleep(REQUEST_RETRY_BACKOFF_SECONDS * attempt)
+
+    LOGGER.error("Không lấy được HTML từ %s: %s", url, _safe_error_message(last_error))
+    return None
+
+
+def _is_retryable_error(exc):
+    response = getattr(exc, "response", None)
+    if response is None:
+        return isinstance(exc, (requests.ConnectionError, requests.Timeout))
+    return response.status_code in {429, 500, 502, 503, 504}
+
+
+def _safe_error_message(exc):
+    if exc is None:
+        return "unknown error"
+    response = getattr(exc, "response", None)
+    if response is not None:
+        return f"HTTP {response.status_code} {response.reason}"
+    return str(exc)
 
 
 def make_soup(url):

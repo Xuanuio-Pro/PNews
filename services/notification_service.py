@@ -4,21 +4,21 @@ import sqlite3
 import unicodedata
 from pathlib import Path
 
+from config.settings import BASE_DIR, DATA_DIR, DATABASE_PATH, resolve_data_path
 from services.notifiers.telegram_notifier import TelegramNotifier
 
 
-BASE_DIR = Path(__file__).resolve().parents[1]
 LOGGER = logging.getLogger(__name__)
 
 
 class NotificationService:
-    def __init__(self, db_path="data/cms.sqlite3"):
-        self.db_path = self._resolve_path(db_path)
+    def __init__(self, db_path=None):
+        self.db_path = self._resolve_path(db_path or DATABASE_PATH)
 
     def _resolve_path(self, path):
         candidate = Path(path or "")
         if not candidate.is_absolute():
-            candidate = BASE_DIR / candidate
+            candidate = resolve_data_path(candidate)
         return candidate
 
     def connect(self):
@@ -134,7 +134,7 @@ class NotificationService:
                 return path
 
         article_id = article.get("id")
-        image_root = BASE_DIR / "data" / "generated_images"
+        image_root = DATA_DIR / "generated_images"
         if not article_id or not image_root.exists():
             return None
 

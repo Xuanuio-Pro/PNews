@@ -2,11 +2,10 @@ import re
 import sqlite3
 import unicodedata
 from datetime import datetime
-from pathlib import Path
 
+from config.settings import BASE_DIR, DATA_DIR, DATABASE_PATH
 
-BASE_DIR = Path(__file__).resolve().parents[1]
-DB_PATH = BASE_DIR / "data" / "cms.sqlite3"
+DB_PATH = DATABASE_PATH
 APPROVED_STATUS_ALIASES = {
     "approved",
     "published",
@@ -281,7 +280,7 @@ def find_rendered_image(title):
     title_slug = slugify(title)
     if not title_slug:
         return ""
-    image_root = BASE_DIR / "data" / "generated_images"
+    image_root = DATA_DIR / "generated_images"
     if not image_root.exists():
         return ""
     for extension in ("*.jpg", "*.jpeg", "*.png", "*.webp"):

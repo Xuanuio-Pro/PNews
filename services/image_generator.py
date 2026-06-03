@@ -1,6 +1,7 @@
 import csv
 import hashlib
 import json
+import logging
 import re
 import sys
 import time
@@ -13,14 +14,15 @@ import requests
 from bs4 import BeautifulSoup
 from PIL import Image, ImageDraw, ImageFont
 
+from config.settings import BASE_DIR, DATA_DIR, resolve_data_path
+
 try:
     from slugify import slugify as py_slugify
 except Exception:  # pragma: no cover - optional dependency
     py_slugify = None
 
 
-BASE_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = BASE_DIR / "data"
+LOGGER = logging.getLogger(__name__)
 
 CANVAS_WIDTH = 1080
 CANVAS_HEIGHT = 1350
@@ -69,6 +71,8 @@ ARTICLE_IMAGE_CACHE_PATH = THUMBNAIL_CACHE_DIR / "article_images.json"
 DEFAULT_OUTPUT_DIR = DATA_DIR / "generated_images"
 
 REQUEST_TIMEOUT_SECONDS = 9
+REQUEST_RETRY_ATTEMPTS = 3
+REQUEST_RETRY_BACKOFF_SECONDS = 1
 JPEG_QUALITY = 92
 THUMBNAIL_OVERLAY_ALPHA = 28
 
@@ -90,6 +94,9 @@ _fallback_image_cache_path = None
 
 
 def safe_print(message):
+    if logging.getLogger().handlers:
+        LOGGER.info("%s", message)
+        return
     try:
         print(message)
     except UnicodeEncodeError:
@@ -116,7 +123,7 @@ def download_image(url):
         image = Image.open(BytesIO(image_bytes))
         return image.convert("RGB")
     except Exception as exc:
-        safe_print(f"[WARN] Khong tai duoc thumbnail '{value}': {exc}")
+        LOGGER.warning("Khong tai duoc thumbnail '%s': %s", value, exc)
         return None
 
 
@@ -310,8 +317,8 @@ def _render_and_save_card(article, output_path, brand_name):
         save_image.save(output)
 
     mode = "fallback" if used_fallback else "thumbnail"
-    safe_print(f"[INFO] {mode} | {thumbnail_source} | {article.get('title', '')}")
-    safe_print(f"[OK] Da tao news card: {output}")
+    LOGGER.info("%s | %s | %s", mode, thumbnail_source, article.get("title", ""))
+    LOGGER.info("Da tao news card: %s", output)
     return output, used_fallback, thumbnail_source
 
 
@@ -464,9 +471,8 @@ def _summary_from_article_url(article):
         return ""
 
     try:
-        response = image_session.get(article_url, timeout=REQUEST_TIMEOUT_SECONDS)
+        response = _get_with_retry(article_url)
         response.encoding = response.apparent_encoding or "utf-8"
-        response.raise_for_status()
     except requests.RequestException:
         return ""
 
@@ -574,8 +580,7 @@ def _extract_article_image_url(article_url):
         return cached_url
 
     try:
-        response = image_session.get(article_url, timeout=REQUEST_TIMEOUT_SECONDS)
-        response.raise_for_status()
+        response = _get_with_retry(article_url)
     except requests.RequestException:
         return ""
 
@@ -679,9 +684,9 @@ def _load_fallback_image(article=None):
         try:
             return Image.open(fallback_path).convert("RGB")
         except Exception as exc:
-            safe_print(f"[WARN] Khong mo duoc fallback image '{fallback_path}': {exc}")
+            LOGGER.warning("Khong mo duoc fallback image '%s': %s", fallback_path, exc)
 
-    safe_print("[WARN] Khong tim thay anh fallback PNews. Tao placeholder tam.")
+    LOGGER.warning("Khong tim thay anh fallback PNews. Tao placeholder tam.")
     return _create_placeholder_thumbnail(article)
 
 
@@ -772,12 +777,54 @@ def _fetch_image_response(url):
     last_error = None
     for candidate in urls:
         try:
-            response = image_session.get(candidate, timeout=REQUEST_TIMEOUT_SECONDS)
+            return _get_with_retry(candidate)
+        except requests.RequestException as exc:
+            last_error = exc
+    raise last_error
+
+
+def _get_with_retry(url):
+    last_error = None
+
+    for attempt in range(1, REQUEST_RETRY_ATTEMPTS + 1):
+        try:
+            response = image_session.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+
+            if response.status_code in {429, 500, 502, 503, 504}:
+                raise requests.HTTPError(
+                    f"{response.status_code} {response.reason}",
+                    response=response,
+                )
+
             response.raise_for_status()
             return response
         except requests.RequestException as exc:
             last_error = exc
+            if attempt >= REQUEST_RETRY_ATTEMPTS or not _is_retryable_error(exc):
+                break
+            LOGGER.warning(
+                "Tam loi khi tai tai nguyen anh (%s), thu lai %s/%s",
+                _safe_error_message(exc),
+                attempt + 1,
+                REQUEST_RETRY_ATTEMPTS,
+            )
+            time.sleep(REQUEST_RETRY_BACKOFF_SECONDS * attempt)
+
     raise last_error
+
+
+def _is_retryable_error(exc):
+    response = getattr(exc, "response", None)
+    if response is None:
+        return isinstance(exc, (requests.ConnectionError, requests.Timeout))
+    return response.status_code in {429, 500, 502, 503, 504}
+
+
+def _safe_error_message(exc):
+    response = getattr(exc, "response", None)
+    if response is not None:
+        return f"HTTP {response.status_code} {response.reason}"
+    return str(exc)
 
 
 def _get_cached_or_downloaded_image(url):
@@ -812,8 +859,8 @@ def _load_font(font_path, size, fallback_paths=None):
         except OSError:
             continue
 
-    safe_print(
-        "[WARN] Khong tim thay font TTF ho tro tieng Viet. "
+    LOGGER.warning(
+        "Khong tim thay font TTF ho tro tieng Viet. "
         "Dung ImageFont.load_default() (co the loi dau tieng Viet)."
     )
     return ImageFont.load_default()
@@ -966,20 +1013,20 @@ def _resolve_local_path(value):
     path = Path(str(value or "").strip())
     if path.is_absolute():
         return path
-    return BASE_DIR / path
+    return resolve_data_path(path)
 
 
 def _resolve_output_dir(output_dir):
     path = Path(str(output_dir or "").strip() or str(DEFAULT_OUTPUT_DIR))
     if not path.is_absolute():
-        path = BASE_DIR / path
+        path = resolve_data_path(path)
     return path
 
 
 def _resolve_output_path(output_path):
     path = Path(str(output_path or "").strip())
     if not path.is_absolute():
-        path = BASE_DIR / path
+        path = resolve_data_path(path)
     return path
 
 

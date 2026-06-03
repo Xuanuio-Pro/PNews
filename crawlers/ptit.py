@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -9,6 +10,8 @@ from crawlers.base import (
     normalize_url,
 )
 
+
+LOGGER = logging.getLogger(__name__)
 
 SOURCE = "PTIT"
 BASE_URL = "https://ptit.edu.vn/"
@@ -190,11 +193,11 @@ def _trim_summary(summary, max_length=320):
 
 
 def crawl_ptit():
-    print(f"  - PTIT/{CATEGORY}")
+    LOGGER.info("PTIT/%s", CATEGORY)
     soup = make_soup(LIST_URL)
 
     if soup is None:
-        print("[WARN] PTIT: không tải được HTML.")
+        LOGGER.warning("PTIT: không tải được HTML.")
         return []
 
     crawled_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -227,7 +230,7 @@ def crawl_ptit():
             _append_unique(articles, seen_urls, article)
 
     if not articles:
-        print("[WARN] PTIT: lấy được 0 bài. Cần kiểm tra selector.")
+        LOGGER.warning("PTIT: lấy được 0 bài. Cần kiểm tra selector.")
 
     return articles
 

@@ -32,10 +32,15 @@ from services.facebook_service import (
     publishMultiPhotoPost,
     publishPhotoPost,
 )
-from services.config import get_config_value, load_env_file
+from services.config import get_config_value
 from services.image_generator import generate_news_card
 from services.notification_service import NotificationService
-from config.settings import DATA_DIR, DATABASE_PATH, LOG_DIR
+from config.settings import (
+    ADMIN_ACCOUNTS_RAW,
+    DATA_DIR,
+    DATABASE_PATH,
+    ensure_runtime_dirs,
+)
 from config.logging_config import setup_logging
 
 # Khởi tạo hệ thống ghi log tập trung cho web app
@@ -44,10 +49,6 @@ LOGGER = logging.getLogger("pnews.web")
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = DATABASE_PATH
-if not DB_PATH.is_absolute():
-    DB_PATH = BASE_DIR / DB_PATH
-if not DATA_DIR.is_absolute():
-    DATA_DIR = BASE_DIR / DATA_DIR
 
 UPLOAD_DIR = DATA_DIR / "uploads"
 ASSET_DIR = BASE_DIR / "web_assets"
@@ -56,7 +57,7 @@ SITE_LOGO_URL = "/assets/pnews-logo.png"
 ASSET_VERSION = str(int(time.time()))
 
 def load_admin_accounts():
-    raw_accounts = get_config_value("PNEWS_ADMIN_ACCOUNTS")
+    raw_accounts = ADMIN_ACCOUNTS_RAW
     accounts = {}
 
     if raw_accounts:
@@ -165,6 +166,7 @@ def escape(value):
 
 def connect_db():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -553,7 +555,7 @@ def ensure_generated_images_for_articles(article_ids):
             generated_path = generate_news_card(article, str(output_dir))
             relative_path = to_relative_media_path(generated_path)
         except Exception as exc:
-            print(f"[WARN] Khong tao duoc anh an pham cho bai #{article_id}: {exc}")
+            LOGGER.warning("Khong tao duoc anh an pham cho bai #%s: %s", article_id, exc)
             continue
 
         if relative_path:
@@ -2915,7 +2917,7 @@ def auto_send_telegram_notice_background(article_ids):
 
     def worker():
         notice = auto_send_telegram_notice(clean_ids)
-        print(f"[INFO] {notice}")
+        LOGGER.info("%s", notice)
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
@@ -3356,7 +3358,7 @@ class CMSHandler(BaseHTTPRequestHandler):
             with Image.open(target) as image:
                 image.save(output, format="PNG")
         except Exception as exc:
-            print(f"[WARN] Khong export duoc PNG cho bai #{article_id}: {exc}")
+            LOGGER.warning("Khong export duoc PNG cho bai #%s: %s", article_id, exc)
             self.respond_html(render_not_found(), HTTPStatus.NOT_FOUND)
             return
 
@@ -3391,7 +3393,7 @@ class CMSHandler(BaseHTTPRequestHandler):
         try:
             response = handle_chat_message(message)
         except Exception as exc:
-            print(f"[WARN] Chat API error: {exc}")
+            LOGGER.warning("Chat API error: %s", exc)
             response = {
                 "answer": "Tôi chưa xử lý được câu hỏi này lúc này. Bạn có thể thử hỏi tin mới nhất hoặc chọn một chủ đề cụ thể hơn.",
                 "articles": [],
@@ -3582,7 +3584,7 @@ class CMSHandler(BaseHTTPRequestHandler):
             shutil.copyfileobj(file, self.wfile)
 
     def log_message(self, format, *args):
-        print("[%s] %s" % (now_iso(), format % args))
+        LOGGER.info("%s", format % args)
 
 
 def guess_content_type(path):
@@ -3602,10 +3604,7 @@ def guess_content_type(path):
 
 def run(host="127.0.0.1", port=8000):
     # Đảm bảo các thư mục cần thiết được tự động tạo khi chạy
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    (DATA_DIR / "generated_images").mkdir(parents=True, exist_ok=True)
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_runtime_dirs()
 
     init_db()
     server = ThreadingHTTPServer((host, port), CMSHandler)

@@ -19,7 +19,7 @@ def main():
     parser.add_argument("--test", action="store_true", help="Send a short Telegram test message.")
     parser.add_argument("--article-id", type=int, help="Send one approved/published article.")
     parser.add_argument("--limit", type=int, help="Send latest approved/published articles.")
-    parser.add_argument("--chat-id", help="Override TELEGRAM_DEFAULT_CHAT_ID.")
+    parser.add_argument("--chat-id", help="Override TELEGRAM_CHAT_ID.")
     args = parser.parse_args()
 
     if not any([args.test, args.article_id, args.limit]):

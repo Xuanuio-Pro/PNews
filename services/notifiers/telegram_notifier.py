@@ -1,38 +1,24 @@
 import html
-import json
-import os
 from pathlib import Path
 
 import requests
 
-
-BASE_DIR = Path(__file__).resolve().parents[2]
-CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+from services.config import get_config_value
 
 
 class TelegramNotifier:
     def __init__(self, bot_token=None, default_chat_id=None, timeout=30):
-        config = self._load_config()
-        self.bot_token = bot_token or os.getenv("TELEGRAM_BOT_TOKEN") or config.get("TELEGRAM_BOT_TOKEN") or ""
+        self.bot_token = bot_token or get_config_value("TELEGRAM_BOT_TOKEN") or ""
         self.default_chat_id = (
             default_chat_id
-            or os.getenv("TELEGRAM_DEFAULT_CHAT_ID")
-            or config.get("TELEGRAM_DEFAULT_CHAT_ID")
+            or get_config_value("TELEGRAM_CHAT_ID")
+            or get_config_value("TELEGRAM_DEFAULT_CHAT_ID")
             or ""
         )
         self.enable_notify = self._parse_bool(
-            os.getenv("ENABLE_TELEGRAM_NOTIFY", config.get("ENABLE_TELEGRAM_NOTIFY", True))
+            get_config_value("ENABLE_TELEGRAM_NOTIFY", "true")
         )
         self.timeout = timeout
-
-    def _load_config(self):
-        if not CONFIG_PATH.exists():
-            return {}
-        try:
-            with CONFIG_PATH.open("r", encoding="utf-8") as file:
-                return json.load(file)
-        except (OSError, json.JSONDecodeError):
-            return {}
 
     def _api_url(self, method):
         if not self.bot_token:

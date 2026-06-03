@@ -1,5 +1,7 @@
 import argparse
+import logging
 
+from config.logging_config import setup_logging
 from services.article_enricher import enrich_missing_summaries
 from services.storage import (
     current_date_folder,
@@ -8,6 +10,10 @@ from services.storage import (
     save_json,
     update_articles_by_url,
 )
+
+
+setup_logging("crawler.log")
+LOGGER = logging.getLogger("pnews.enrich")
 
 
 def parse_args():
@@ -54,7 +60,7 @@ def main():
     articles = read_articles_csv(args.input)
 
     if not articles:
-        print(f"Không có bài viết để enrich: {args.input}")
+        LOGGER.info("Không có bài viết để enrich: %s", args.input)
         return
 
     enriched_articles = enrich_missing_summaries(
@@ -67,7 +73,7 @@ def main():
     if not args.no_sync:
         sync_enriched_articles(enriched_articles, args.date_folder)
 
-    print(f"Đã enrich summary cho {len(enriched_articles)} bài.")
+    LOGGER.info("Đã enrich summary cho %s bài.", len(enriched_articles))
 
 
 def sync_enriched_articles(enriched_articles, date_folder=None):

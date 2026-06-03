@@ -76,8 +76,10 @@ Code/
 |-- web_app.py
 |-- run_crawler.bat
 |-- requirements.txt
+|-- .env.example
 |-- config/
-|   `-- api_keys.example.json
+|   |-- settings.py
+|   `-- logging_config.py
 |-- crawlers/
 |   |-- base.py
 |   |-- vnexpress.py
@@ -186,12 +188,6 @@ Tao thu 3-5 an pham tu du lieu hien co, khong can API key va khong can crawl moi
 python scripts/test_generate_news_cards.py
 ```
 
-Hoac neu dung virtualenv `detai1`:
-
-```powershell
-.\detai1\Scripts\python.exe scripts\test_generate_news_cards.py
-```
-
 Script uu tien doc `data/exports/articles.csv`, neu khong co thi doc `data/raw/articles.json`, sau do moi tao bai demo. Anh tao ra duoc in duong dan va nam trong `data/generated_images/`.
 
 ## Cai dat
@@ -205,21 +201,15 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Neu dung virtualenv hien co cua project:
-
-```powershell
-.\detai1\Scripts\python.exe -m pip install -r requirements.txt
-```
-
 ## Cau hinh API key
 
-Sao chep file mau:
+Sao chep file mau `.env`:
 
 ```powershell
-Copy-Item config\api_keys.example.json config\api_keys.json
+Copy-Item .env.example .env
 ```
 
-Sau do dien key that vao `config/api_keys.json`. File nay da duoc ignore de khong day len GitHub.
+Sau do dien key that vao `.env`. File nay da duoc ignore de khong day len GitHub.
 
 ## Cau hinh tai khoan admin
 
@@ -234,7 +224,7 @@ Co the cau hinh nhieu tai khoan bang JSON object. File `.env` da duoc ignore, ch
 ## Chay crawler
 
 ```powershell
-.\detai1\Scripts\python.exe -X utf8 main.py
+python -X utf8 main.py
 ```
 
 Hoac:
@@ -306,9 +296,9 @@ Khong xoa `data/generated_images/` khi web admin/client dang can hien thi an pha
 ## Kiem tra nhanh
 
 ```powershell
-.\detai1\Scripts\python.exe -m py_compile main.py web_app.py crawlers\base.py crawlers\vnexpress.py crawlers\baochinhphu.py crawlers\ptit.py services\classifier.py services\storage.py services\image_generator.py services\notification_service.py
-.\detai1\Scripts\python.exe -X utf8 main.py
-.\detai1\Scripts\python.exe scripts\test_generate_news_cards.py
+python -m py_compile main.py web_app.py crawlers\base.py crawlers\vnexpress.py crawlers\baochinhphu.py crawlers\ptit.py services\classifier.py services\storage.py services\image_generator.py services\notification_service.py
+python -X utf8 main.py
+python scripts\test_generate_news_cards.py
 ```
 
 ## Dua len GitHub

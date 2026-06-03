@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import sqlite3
 from datetime import datetime
@@ -37,6 +38,7 @@ CHAT_TIMEOUT = get_int_config_value("CHATBOT_REQUEST_TIMEOUT", 18)
 GEMINI_MODEL = get_config_value("GEMINI_MODEL", "gemini-2.5-flash")
 GROQ_MODEL = get_config_value("GROQ_MODEL", "llama-3.1-8b-instant")
 MAX_MESSAGE_LENGTH = 500
+LOGGER = logging.getLogger(__name__)
 
 
 def handle_chat_message(message):
@@ -343,11 +345,13 @@ def call_gemini(prompt):
             timeout=CHAT_TIMEOUT,
         )
         if response.status_code in {401, 403, 429, 500, 502, 503, 504}:
+            LOGGER.warning("Gemini chatbot request failed: HTTP %s", response.status_code)
             return ""
         response.raise_for_status()
         data = response.json()
         return _clean_ai_answer(data["candidates"][0]["content"]["parts"][0]["text"])
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning("Gemini chatbot error: %s", exc.__class__.__name__)
         return ""
 
 
@@ -376,11 +380,13 @@ def call_groq(prompt):
             timeout=CHAT_TIMEOUT,
         )
         if response.status_code in {401, 403, 429, 500, 502, 503, 504}:
+            LOGGER.warning("Groq chatbot request failed: HTTP %s", response.status_code)
             return ""
         response.raise_for_status()
         data = response.json()
         return _clean_ai_answer(data["choices"][0]["message"]["content"])
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning("Groq chatbot error: %s", exc.__class__.__name__)
         return ""
 
 

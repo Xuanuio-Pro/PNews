@@ -9,6 +9,7 @@ if str(ROOT_DIR) not in sys.path:
 
 # Cấu hình logging ghi vào logs/crawler.log và console
 from config.logging_config import setup_logging
+from config.settings import DATABASE_PATH
 setup_logging("crawler.log")
 LOGGER = logging.getLogger("pnews.sync")
 
@@ -16,7 +17,7 @@ import web_app
 
 
 def count_articles():
-    db_path = Path("data/cms.sqlite3")
+    db_path = DATABASE_PATH
     if not db_path.exists():
         return 0
 

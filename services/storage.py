@@ -1,12 +1,16 @@
 import json
+import logging
 import re
 import unicodedata
 from datetime import datetime
-from pathlib import Path
 
 import pandas as pd
 from pandas.errors import EmptyDataError
 
+from config.settings import DATA_DIR, resolve_data_path
+
+
+LOGGER = logging.getLogger(__name__)
 
 OUTPUT_COLUMNS = [
     "source",
@@ -68,7 +72,7 @@ def sort_articles_by_published_at(articles):
 
 
 def read_articles_csv(path):
-    path = Path(path)
+    path = resolve_data_path(path)
 
     if not path.exists():
         return []
@@ -80,25 +84,25 @@ def read_articles_csv(path):
 
 
 def save_all_articles(articles, output_path="data/exports/articles.csv"):
-    output_path = Path(output_path)
+    output_path = resolve_data_path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     to_dataframe(articles).to_csv(output_path, index=False, encoding="utf-8-sig")
-    print(f"[OK] Đã lưu dữ liệu vào: {output_path}")
+    LOGGER.info("Đã lưu dữ liệu vào: %s", output_path)
 
 
 def save_json(articles, output_path="data/raw/articles.json"):
-    output_path = Path(output_path)
+    output_path = resolve_data_path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with output_path.open("w", encoding="utf-8") as file:
         json.dump(articles, file, ensure_ascii=False, indent=2)
 
-    print(f"[OK] Đã lưu JSON vào: {output_path}")
+    LOGGER.info("Đã lưu JSON vào: %s", output_path)
 
 
 def save_by_field(articles, field_name, base_folder):
-    base_folder = Path(base_folder)
+    base_folder = resolve_data_path(base_folder)
     base_folder.mkdir(parents=True, exist_ok=True)
 
     for old_file in base_folder.glob("*.csv"):
@@ -113,7 +117,7 @@ def save_by_field(articles, field_name, base_folder):
     for key, items in sorted(grouped_data.items()):
         output_path = base_folder / f"{slugify(key)}.csv"
         to_dataframe(items).to_csv(output_path, index=False, encoding="utf-8-sig")
-        print(f"[OK] {field_name} = {key}: {len(items)} bài -> {output_path}")
+        LOGGER.info("%s = %s: %s bài -> %s", field_name, key, len(items), output_path)
 
 
 def split_new_articles(articles, master_path="data/master/master_articles.csv"):
@@ -191,7 +195,7 @@ def update_articles_by_url(updated_articles, target_path):
 
 def save_daily_outputs(articles, new_articles, date_folder=None):
     date_folder = date_folder or current_date_folder()
-    daily_base = Path("data/daily") / date_folder
+    daily_base = DATA_DIR / "daily" / date_folder
 
     save_json(articles, daily_base / "raw" / "articles.json")
     save_all_articles(articles, daily_base / "exports" / "articles.csv")

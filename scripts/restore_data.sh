@@ -8,6 +8,7 @@ cd "$PROJECT_DIR"
 BACKUP_FILE="$1"
 RESTORE_LOG="logs/restore.log"
 mkdir -p logs
+mkdir -p backups
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] === Bắt đầu tiến trình khôi phục dữ liệu ===" >> "$RESTORE_LOG"
 
@@ -39,13 +40,13 @@ if tar -xzf "$BACKUP_FILE" >> "$RESTORE_LOG" 2>&1; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] Giải nén dữ liệu hoàn thành." >> "$RESTORE_LOG"
 else
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] Lỗi khi giải nén file backup. Cố gắng khởi động lại dịch vụ..." >> "$RESTORE_LOG"
-    docker compose start pnews-web >> "$RESTORE_LOG" 2>&1 || true
+    docker compose up -d pnews-web >> "$RESTORE_LOG" 2>&1 || true
     exit 1
 fi
 
 # 4. Khởi động lại dịch vụ
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] Khởi động lại dịch vụ pnews-web..." >> "$RESTORE_LOG"
-docker compose start pnews-web >> "$RESTORE_LOG" 2>&1
+docker compose up -d pnews-web >> "$RESTORE_LOG" 2>&1
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] === Kết thúc tiến trình khôi phục dữ liệu thành công ===" >> "$RESTORE_LOG"
 echo "Khôi phục thành công. Vui lòng xem logs/restore.log để biết chi tiết."

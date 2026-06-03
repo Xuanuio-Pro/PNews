@@ -84,13 +84,6 @@ python -m py_compile main.py web_app.py services/image_generator.py services/sto
 python scripts/test_generate_news_cards.py
 ```
 
-Neu dung virtualenv `detai1`:
-
-```powershell
-.\detai1\Scripts\python.exe -m py_compile main.py web_app.py services\image_generator.py services\storage.py services\notification_service.py
-.\detai1\Scripts\python.exe scripts\test_generate_news_cards.py
-```
-
 ## API public
 
 ```text

@@ -7,7 +7,7 @@ if not exist "logs" mkdir "logs"
 if "%CARD_LIMIT%"=="" set "CARD_LIMIT=20"
 
 set "PYTHON_CMD=python"
-if exist "detai1\Scripts\python.exe" set "PYTHON_CMD=detai1\Scripts\python.exe"
+if exist ".venv\Scripts\python.exe" set "PYTHON_CMD=.venv\Scripts\python.exe"
 
 echo [%date% %time%] Starting crawler >> "logs\crawler.log"
 

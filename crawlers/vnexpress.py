@@ -1,8 +1,11 @@
+import logging
 from datetime import datetime
 from urllib.parse import urlparse
 
 from crawlers.base import clean_text, extract_image_url, extract_published_at, make_soup, normalize_url
 
+
+LOGGER = logging.getLogger(__name__)
 
 SOURCE = "VNExpress"
 BASE_URL = "https://vnexpress.net/"
@@ -90,7 +93,7 @@ def crawl_category(category, info):
     soup = make_soup(url)
 
     if soup is None:
-        print(f"[WARN] VNExpress/{category}: không tải được HTML.")
+        LOGGER.warning("VNExpress/%s: không tải được HTML.", category)
         return []
 
     crawled_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -118,7 +121,7 @@ def crawl_category(category, info):
             _append_unique(articles, seen_urls, article)
 
     if not articles:
-        print(f"[WARN] VNExpress/{category}: lấy được 0 bài. Cần kiểm tra selector.")
+        LOGGER.warning("VNExpress/%s: lấy được 0 bài. Cần kiểm tra selector.", category)
 
     return articles
 
@@ -127,7 +130,7 @@ def crawl_vnexpress():
     articles = []
 
     for category, info in VNEXPRESS_CATEGORIES.items():
-        print(f"  - VNExpress/{category}")
+        LOGGER.info("VNExpress/%s", category)
         articles.extend(crawl_category(category, info))
 
     return articles

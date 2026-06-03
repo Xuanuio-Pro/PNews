@@ -1,9 +1,12 @@
+import logging
 import re
 from datetime import datetime
 from urllib.parse import urlparse
 
 from crawlers.base import clean_text, extract_image_url, extract_published_at, make_soup, normalize_url
 
+
+LOGGER = logging.getLogger(__name__)
 
 SOURCE = "Báo Chính phủ"
 BASE_URL = "https://baochinhphu.vn/"
@@ -77,11 +80,11 @@ def extract_summary(block, title):
 
 
 def crawl_baochinhphu():
-    print(f"  - Báo Chính phủ/{CATEGORY}")
+    LOGGER.info("Báo Chính phủ/%s", CATEGORY)
     soup = make_soup(LIST_URL)
 
     if soup is None:
-        print("[WARN] Báo Chính phủ: không tải được HTML.")
+        LOGGER.warning("Báo Chính phủ: không tải được HTML.")
         return []
 
     crawled_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -111,7 +114,7 @@ def crawl_baochinhphu():
             _append_unique(articles, seen_urls, article)
 
     if not articles:
-        print("[WARN] Báo Chính phủ: lấy được 0 bài. Cần kiểm tra selector.")
+        LOGGER.warning("Báo Chính phủ: lấy được 0 bài. Cần kiểm tra selector.")
 
     return articles
 

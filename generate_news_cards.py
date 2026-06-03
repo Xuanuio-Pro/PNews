@@ -1,12 +1,22 @@
 import argparse
+import logging
 import sys
 from pathlib import Path
 
+from config.logging_config import setup_logging
+from config.settings import DATA_DIR, resolve_data_path
 from services.image_generator import create_news_cards_from_csv
 from services.storage import current_date_folder
 
 
+setup_logging("crawler.log")
+LOGGER = logging.getLogger("pnews.cards")
+
+
 def safe_print(message):
+    if logging.getLogger().handlers:
+        LOGGER.info("%s", message)
+        return
     try:
         print(message)
     except UnicodeEncodeError:
@@ -56,8 +66,8 @@ def parse_args():
 def main():
     args = parse_args()
     limit = None if args.limit == 0 else args.limit
-    output_dir = args.output_dir or f"data/generated_images/{current_date_folder()}"
-    input_path = Path(args.input)
+    output_dir = args.output_dir or str(DATA_DIR / "generated_images" / current_date_folder())
+    input_path = resolve_data_path(args.input)
 
     if not input_path.exists():
         safe_print(f"Không tìm thấy file input: {input_path}")
@@ -71,7 +81,7 @@ def main():
         clean_output_dir(output_dir)
 
     output_paths = create_news_cards_from_csv(
-        csv_path=args.input,
+        csv_path=str(input_path),
         output_dir=output_dir,
         limit=limit,
         brand_name=args.brand,

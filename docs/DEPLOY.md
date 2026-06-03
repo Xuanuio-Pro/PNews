@@ -65,7 +65,6 @@ Neu dung reverse proxy, tro proxy ve `127.0.0.1:8000`.
 Nhung du lieu sau sinh ra tren server va khong dua len GitHub:
 
 - `.env`
-- `config/api_keys.json`
 - `data/cms.sqlite3`
 - `data/generated_images/`
 - `data/uploads/`

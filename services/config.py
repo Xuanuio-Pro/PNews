@@ -1,10 +1,8 @@
-import json
 import os
 from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-API_KEYS_PATH = Path("config/api_keys.json")
 ENV_PATH = BASE_DIR / ".env"
 
 
@@ -33,15 +31,14 @@ def load_env_file(path=ENV_PATH):
 
 
 def get_config_value(name, default=""):
-    """Read config from environment first, then config/api_keys.json."""
+    """Read config from environment or the local .env file only."""
     load_env_file()
     env_value = os.getenv(name)
 
     if env_value:
         return env_value
 
-    config = load_api_config()
-    return config.get(name) or default
+    return default
 
 
 def get_int_config_value(name, default):
@@ -51,14 +48,3 @@ def get_int_config_value(name, default):
         return int(value)
     except (TypeError, ValueError):
         return default
-
-
-def load_api_config():
-    if not API_KEYS_PATH.exists():
-        return {}
-
-    try:
-        with API_KEYS_PATH.open("r", encoding="utf-8") as file:
-            return json.load(file)
-    except (json.JSONDecodeError, OSError):
-        return {}

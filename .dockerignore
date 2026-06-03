@@ -1,3 +1,5 @@
+**/__pycache__/
+**pycache**/
 __pycache__/
 *.pyc
 *.pyo
@@ -10,6 +12,8 @@ venv/
 detai1/
 logs/
 *.log
+backups/
+config/api_keys.json
 data/raw/
 data/exports/
 data/generated_images/
