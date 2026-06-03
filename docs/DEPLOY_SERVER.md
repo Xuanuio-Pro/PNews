@@ -123,6 +123,20 @@ chmod +x /opt/pnews/scripts/setup_nginx_cloudflare.sh
 /opt/pnews/scripts/setup_nginx_cloudflare.sh
 ```
 
+Nếu muốn dùng Cloudflare Tunnel thay vì mở public port qua Nginx, cấu hình Public Hostname trong Cloudflare trỏ về `http://127.0.0.1:8000`, điền tunnel token vào `.env`, rồi chạy:
+
+```ini
+PNEWS_TUNNEL_HOSTNAME=news.example.com
+CLOUDFLARE_TUNNEL_TOKEN=your_cloudflare_tunnel_token
+```
+
+```bash
+chmod +x /opt/pnews/scripts/setup_cloudflare_tunnel.sh
+/opt/pnews/scripts/setup_cloudflare_tunnel.sh
+```
+
+Xem hướng dẫn chi tiết tại `docs/CLOUDFLARE_TUNNEL.md`.
+
 ---
 
 ## 7. Kiểm tra chạy thử Crawler thủ công

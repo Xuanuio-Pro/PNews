@@ -2,6 +2,8 @@
 
 Tài liệu này dùng để cấu hình Nginx làm reverse proxy từ domain public vào web app PNews đang chạy bằng Docker Compose tại `127.0.0.1:8000`.
 
+Nếu bạn muốn dùng Cloudflare Tunnel thay vì Nginx public port, xem `docs/CLOUDFLARE_TUNNEL.md`.
+
 ## 1. Điều kiện trước
 
 - Docker service `pnews-web` đã chạy:

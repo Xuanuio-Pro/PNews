@@ -21,6 +21,10 @@ Hệ thống PNews sử dụng các biến môi trường để nạp cấu hìn
 | `CLOUDFLARE_API_TOKEN` | String | Rỗng | Alias viết đúng chính tả; script dùng nếu `CLOULDFARE_TOKEN` trống. | Không |
 | `CLOUDFLARE_DNS_PROPAGATION_SECONDS` | Integer | `60` | Thời gian chờ DNS propagation trước khi Certbot xác minh. | Không |
 | `PNEWS_DISABLE_DEFAULT_NGINX_SITE` | Boolean | `1` | Xóa symlink site mặc định của Nginx khi setup site PNews. | Không |
+| `PNEWS_TUNNEL_HOSTNAME` | String | Rỗng | Public hostname đã cấu hình trong Cloudflare Tunnel, ví dụ `news.example.com`. | Chỉ khi dùng Tunnel |
+| `PNEWS_TUNNEL_HEALTH_URL` | String | `http://127.0.0.1:8000/health` | URL nội bộ để script kiểm tra web app trước khi bật Tunnel. | Không |
+| `CLOUDFLARE_TUNNEL_TOKEN` | String | Rỗng | Token connector của Cloudflare Tunnel. | Chỉ khi dùng Tunnel |
+| `CLOULDFARE_TUNNEL_TOKEN` | String | Rỗng | Alias viết lệch để tương thích nếu bạn quen dùng `CLOULDFARE`. | Không |
 
 ---
 
@@ -79,6 +83,12 @@ CLOULDFARE_TOKEN=your_cloudflare_dns_api_token
 CLOUDFLARE_API_TOKEN=
 CLOUDFLARE_DNS_PROPAGATION_SECONDS=60
 PNEWS_DISABLE_DEFAULT_NGINX_SITE=1
+
+# Cloudflare Tunnel connector
+PNEWS_TUNNEL_HOSTNAME=your-domain.com
+PNEWS_TUNNEL_HEALTH_URL=http://127.0.0.1:8000/health
+CLOUDFLARE_TUNNEL_TOKEN=your_cloudflare_tunnel_token
+CLOULDFARE_TUNNEL_TOKEN=
 
 # Tài khoản Admin đăng nhập CMS
 PNEWS_ADMIN_ACCOUNTS={"admin":"replace_with_a_strong_password"}
