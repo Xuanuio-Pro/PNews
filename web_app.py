@@ -1,4 +1,4 @@
-﻿import csv
+import csv
 import hashlib
 import html
 import io
@@ -35,24 +35,25 @@ from services.facebook_service import (
 from services.config import get_config_value, load_env_file
 from services.image_generator import generate_news_card
 from services.notification_service import NotificationService
+from config.settings import DATA_DIR, DATABASE_PATH, LOG_DIR
+from config.logging_config import setup_logging
 
-
-load_env_file()
-logging.basicConfig(
-    level=get_config_value("PNEWS_LOG_LEVEL", "INFO"),
-    format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
-)
-LOGGER = logging.getLogger(__name__)
+# Khởi tạo hệ thống ghi log tập trung cho web app
+setup_logging("app.log")
+LOGGER = logging.getLogger("pnews.web")
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-DB_PATH = DATA_DIR / "cms.sqlite3"
+DB_PATH = DATABASE_PATH
+if not DB_PATH.is_absolute():
+    DB_PATH = BASE_DIR / DB_PATH
+if not DATA_DIR.is_absolute():
+    DATA_DIR = BASE_DIR / DATA_DIR
+
 UPLOAD_DIR = DATA_DIR / "uploads"
 ASSET_DIR = BASE_DIR / "web_assets"
 DEFAULT_THUMBNAIL = "PNews.png"
 SITE_LOGO_URL = "/assets/pnews-logo.png"
 ASSET_VERSION = str(int(time.time()))
-
 
 def load_admin_accounts():
     raw_accounts = get_config_value("PNEWS_ADMIN_ACCOUNTS")
@@ -3029,6 +3030,25 @@ class CMSHandler(BaseHTTPRequestHandler):
 
         if path == "/":
             self.redirect("/client")
+        elif path == "/health":
+            db_status = "ok"
+            status_code = HTTPStatus.OK
+            try:
+                with connect_db() as conn:
+                    conn.execute("SELECT 1").fetchone()
+            except Exception as e:
+                db_status = f"error: {str(e)}"
+                status_code = HTTPStatus.SERVICE_UNAVAILABLE
+                try:
+                    DATA_DIR.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    pass
+            self.respond_json({
+                "status": "ok" if status_code == HTTPStatus.OK else "degraded",
+                "database": db_status,
+                "time": now_iso(),
+                "app": "PNews"
+            }, status=status_code)
         elif path == "/client":
             self.respond_html(render_client_home(query))
         elif path.startswith("/client/article/"):
@@ -3581,9 +3601,15 @@ def guess_content_type(path):
 
 
 def run(host="127.0.0.1", port=8000):
+    # Đảm bảo các thư mục cần thiết được tự động tạo khi chạy
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    (DATA_DIR / "generated_images").mkdir(parents=True, exist_ok=True)
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
     init_db()
     server = ThreadingHTTPServer((host, port), CMSHandler)
-    print(f"PNews CMS running at http://{host}:{port}")
+    LOGGER.info(f"PNews CMS running at http://{host}:{port}")
     server.serve_forever()
 
 
