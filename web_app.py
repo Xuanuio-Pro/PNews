@@ -1,14 +1,16 @@
-import csv
+﻿import csv
 import hashlib
 import html
 import io
 import json
+import logging
 import os
 import re
 import secrets
 import shutil
 import sqlite3
 import threading
+import time
 import unicodedata
 from datetime import datetime
 from http import HTTPStatus
@@ -21,19 +23,75 @@ from PIL import Image
 
 from services.article_search import find_rendered_image
 from services.chatbot_service import CHAT_SUGGESTIONS, handle_chat_message, init_chat_logs
+from services.facebook_service import (
+    FacebookAPIError,
+    FacebookConfigError,
+    FacebookPublishError,
+    buildFacebookCaption,
+    getPostInfo,
+    publishMultiPhotoPost,
+    publishPhotoPost,
+)
+from services.config import get_config_value, load_env_file
 from services.image_generator import generate_news_card
 from services.notification_service import NotificationService
 
+
+load_env_file()
+logging.basicConfig(
+    level=get_config_value("PNEWS_LOG_LEVEL", "INFO"),
+    format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
+)
+LOGGER = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "cms.sqlite3"
 UPLOAD_DIR = DATA_DIR / "uploads"
 ASSET_DIR = BASE_DIR / "web_assets"
+DEFAULT_THUMBNAIL = "PNews.png"
+SITE_LOGO_URL = "/assets/pnews-logo.png"
+ASSET_VERSION = str(int(time.time()))
 
-ADMIN_USERNAME = os.environ.get("IEC_ADMIN_USER", "admin")
-ADMIN_PASSWORD = os.environ.get("IEC_ADMIN_PASSWORD", "admin123")
-SESSION_COOKIE = "iec_cms_session"
+
+def load_admin_accounts():
+    raw_accounts = get_config_value("PNEWS_ADMIN_ACCOUNTS")
+    accounts = {}
+
+    if raw_accounts:
+        try:
+            parsed_accounts = json.loads(raw_accounts)
+        except json.JSONDecodeError:
+            parsed_accounts = None
+
+        if isinstance(parsed_accounts, dict):
+            accounts.update(
+                {
+                    str(username): str(password)
+                    for username, password in parsed_accounts.items()
+                    if username and password
+                }
+            )
+        else:
+            for item in re.split(r"[;,]", raw_accounts):
+                if ":" not in item:
+                    continue
+                username, password = item.split(":", 1)
+                username = username.strip()
+                password = password.strip()
+                if username and password:
+                    accounts[username] = password
+
+    single_user = get_config_value("PNEWS_ADMIN_USER")
+    single_password = get_config_value("PNEWS_ADMIN_PASSWORD")
+    if single_user and single_password:
+        accounts[single_user] = single_password
+
+    return accounts
+
+
+ADMIN_ACCOUNTS = load_admin_accounts()
+SESSION_COOKIE = "pnews_cms_session"
 SESSIONS = set()
 CLIENT_PAGE_SIZE = 12
 ADMIN_PAGE_SIZE = 10
@@ -69,9 +127,16 @@ DEPRECATED_SOURCES = {"Dân trí", "24h"}
 
 STATUS_LABELS = {
     "pending": "Chờ duyệt",
-    "approved": "Đã đăng",
+    "approved": "Đã duyệt",
     "rejected": "Từ chối",
     "deleted": "Đã xóa",
+}
+
+FACEBOOK_STATUS_LABELS = {
+    "not_posted": "Chưa đăng FB",
+    "posting": "Đang đăng FB",
+    "success": "Đã đăng FB",
+    "failed": "Lỗi đăng FB",
 }
 
 ALLOWED_UPLOAD_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
@@ -94,7 +159,7 @@ def slugify(value):
 
 
 def escape(value):
-    return html.escape(str(value or ""), quote=True)
+    return html.escape("" if value is None else str(value), quote=True)
 
 
 def connect_db():
@@ -126,17 +191,28 @@ def init_db():
                 content_topic TEXT DEFAULT '',
                 category TEXT DEFAULT '',
                 image_path TEXT DEFAULT '',
+                generated_poster_image TEXT DEFAULT '',
+                approval_status TEXT NOT NULL DEFAULT 'pending',
                 status TEXT NOT NULL DEFAULT 'pending',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 approved_at TEXT DEFAULT '',
                 reviewed_at TEXT DEFAULT '',
-                deleted_at TEXT DEFAULT ''
+                deleted_at TEXT DEFAULT '',
+                facebook_posted INTEGER DEFAULT 0,
+                facebook_post_id TEXT DEFAULT '',
+                facebook_permalink TEXT DEFAULT '',
+                facebook_published_at TEXT DEFAULT '',
+                facebook_publish_status TEXT DEFAULT 'not_posted',
+                facebook_publish_error TEXT DEFAULT '',
+                facebook_caption TEXT DEFAULT ''
             )
             """
         )
         ensure_article_schema(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_status ON articles(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_approval_status ON articles(approval_status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_facebook_status ON articles(facebook_publish_status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_source ON articles(source)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_topic ON articles(content_topic)")
@@ -155,11 +231,22 @@ def ensure_article_schema(conn):
     migrations = {
         "published_at": "ALTER TABLE articles ADD COLUMN published_at TEXT DEFAULT ''",
         "approved_at": "ALTER TABLE articles ADD COLUMN approved_at TEXT DEFAULT ''",
+        "approval_status": "ALTER TABLE articles ADD COLUMN approval_status TEXT DEFAULT 'pending'",
+        "facebook_posted": "ALTER TABLE articles ADD COLUMN facebook_posted INTEGER DEFAULT 0",
+        "facebook_post_id": "ALTER TABLE articles ADD COLUMN facebook_post_id TEXT DEFAULT ''",
+        "facebook_permalink": "ALTER TABLE articles ADD COLUMN facebook_permalink TEXT DEFAULT ''",
+        "facebook_published_at": "ALTER TABLE articles ADD COLUMN facebook_published_at TEXT DEFAULT ''",
+        "facebook_publish_status": "ALTER TABLE articles ADD COLUMN facebook_publish_status TEXT DEFAULT 'not_posted'",
+        "facebook_publish_error": "ALTER TABLE articles ADD COLUMN facebook_publish_error TEXT DEFAULT ''",
+        "facebook_caption": "ALTER TABLE articles ADD COLUMN facebook_caption TEXT DEFAULT ''",
+        "generated_poster_image": "ALTER TABLE articles ADD COLUMN generated_poster_image TEXT DEFAULT ''",
     }
 
     for column, sql in migrations.items():
         if column not in columns:
             conn.execute(sql)
+
+    columns = get_table_columns(conn, "articles")
 
     conn.execute(
         """
@@ -173,6 +260,43 @@ def ensure_article_schema(conn):
         UPDATE articles
         SET approved_at = COALESCE(NULLIF(approved_at, ''), NULLIF(reviewed_at, ''))
         WHERE status = 'approved' AND (approved_at IS NULL OR TRIM(approved_at) = '')
+        """
+    )
+    conn.execute(
+        """
+        UPDATE articles
+        SET approval_status = CASE
+            WHEN status IN ('pending', 'approved', 'rejected') THEN status
+            ELSE COALESCE(NULLIF(approval_status, ''), 'pending')
+        END
+        WHERE approval_status IS NULL OR TRIM(approval_status) = ''
+        """
+    )
+    conn.execute(
+        """
+        UPDATE articles
+        SET approval_status = status
+        WHERE status IN ('pending', 'approved', 'rejected')
+          AND COALESCE(NULLIF(TRIM(approval_status), ''), '') != status
+        """
+    )
+    conn.execute(
+        """
+        UPDATE articles
+        SET facebook_publish_status = CASE
+            WHEN COALESCE(facebook_posted, 0) = 1 THEN 'success'
+            ELSE 'not_posted'
+        END
+        WHERE facebook_publish_status IS NULL OR TRIM(facebook_publish_status) = ''
+        """
+    )
+    conn.execute(
+        """
+        UPDATE articles
+        SET generated_poster_image = COALESCE(NULLIF(generated_poster_image, ''), NULLIF(image_path, ''), '')
+        WHERE (generated_poster_image IS NULL OR TRIM(generated_poster_image) = '')
+          AND image_path IS NOT NULL
+          AND TRIM(image_path) != ''
         """
     )
 
@@ -202,6 +326,7 @@ def seed_articles_from_csv():
                 image_path = match_generated_image(title, generated_images)
                 values = {column: row.get(column, "") for column in ARTICLE_COLUMNS}
                 values["image_path"] = image_path
+                values["generated_poster_image"] = image_path
                 values["created_at"] = now_iso()
                 values["updated_at"] = values["created_at"]
 
@@ -225,6 +350,10 @@ def seed_articles_from_csv():
                             image_path = CASE
                                 WHEN image_path IS NULL OR TRIM(image_path) = '' THEN :image_path
                                 ELSE image_path
+                            END,
+                            generated_poster_image = CASE
+                                WHEN generated_poster_image IS NULL OR TRIM(generated_poster_image) = '' THEN :generated_poster_image
+                                ELSE generated_poster_image
                             END
                         WHERE id = :id
                         """,
@@ -237,11 +366,11 @@ def seed_articles_from_csv():
                     INSERT INTO articles (
                         source, title, url, crawled_at, published_at, thumbnail, summary,
                         summary_source, newspaper_type, content_topic, category,
-                        image_path, created_at, updated_at
+                        image_path, generated_poster_image, created_at, updated_at
                     ) VALUES (
                         :source, :title, :url, :crawled_at, :published_at, :thumbnail, :summary,
                         :summary_source, :newspaper_type, :content_topic, :category,
-                        :image_path, :created_at, :updated_at
+                        :image_path, :generated_poster_image, :created_at, :updated_at
                     )
                     """,
                     values,
@@ -327,6 +456,63 @@ def resolve_article_export_image(article):
     return target
 
 
+def resolve_article_facebook_image(article):
+    if not article:
+        return None, None
+
+    article_id = int(article["id"])
+    ensure_generated_images_for_articles([article_id])
+    refreshed = article_to_dict(get_article(article_id)) or article_to_dict(article) or {}
+
+    for key in ("generated_poster_image", "image_path"):
+        image_path = to_relative_media_path(refreshed.get(key))
+        if image_path:
+            target = (BASE_DIR / image_path).resolve()
+            try:
+                target.relative_to(BASE_DIR.resolve())
+            except ValueError:
+                continue
+            if target.exists() and target.is_file():
+                refreshed["generated_poster_image"] = image_path
+                return target, refreshed
+
+    export_image = resolve_article_export_image(refreshed)
+    if export_image:
+        relative_path = str(export_image.resolve().relative_to(BASE_DIR.resolve())).replace("\\", "/")
+        refreshed["generated_poster_image"] = relative_path
+        return export_image, refreshed
+
+    return None, refreshed
+
+
+def build_facebook_bulk_caption(articles):
+    valid_articles = [article for article in articles or [] if article]
+    parts = ["📌 TIN MỚI TỪ PNEWS", ""]
+
+    for index, article in enumerate(valid_articles, start=1):
+        title = str(article.get("title") or "Cập nhật tin tức mới").strip()
+        summary = str(article.get("summary") or "").strip()
+        source = str(article.get("source") or "PNews").strip()
+        url = str(article.get("url") or "").strip()
+
+        parts.append(f"{index}. {title}")
+        if summary:
+            parts.append(summary)
+        parts.append(f"Nguồn: {source}")
+        if url:
+            parts.append(f"🔗 Xem chi tiết: {url}")
+        parts.append("")
+
+    parts.extend(
+        [
+            "PNews tự động tổng hợp và chọn lọc các tin tức nổi bật về giáo dục, khoa học, công nghệ và hoạt động PTIT.",
+            "",
+            "#PNews #PTIT #TinTucCongNghe #GiaoDuc #KhoaHocCongNghe",
+        ]
+    )
+    return "\n".join(parts).strip()
+
+
 def ensure_generated_images_for_articles(article_ids):
     ids = [int(raw_id) for raw_id in (article_ids or []) if str(raw_id).isdigit()]
     if not ids:
@@ -354,12 +540,12 @@ def ensure_generated_images_for_articles(article_ids):
         existing = to_relative_media_path(article.get("image_path"))
         if existing:
             if existing != (article.get("image_path") or ""):
-                updates.append((existing, timestamp, article_id))
+                updates.append((existing, existing, timestamp, article_id))
             continue
 
         matched = match_generated_image(article.get("title", ""), generated_images)
         if matched:
-            updates.append((matched, timestamp, article_id))
+            updates.append((matched, matched, timestamp, article_id))
             continue
 
         try:
@@ -370,7 +556,7 @@ def ensure_generated_images_for_articles(article_ids):
             continue
 
         if relative_path:
-            updates.append((relative_path, timestamp, article_id))
+            updates.append((relative_path, relative_path, timestamp, article_id))
             generated_images.insert(0, Path(BASE_DIR / relative_path))
 
     if not updates:
@@ -378,7 +564,17 @@ def ensure_generated_images_for_articles(article_ids):
 
     with connect_db() as conn:
         conn.executemany(
-            "UPDATE articles SET image_path = ?, updated_at = ? WHERE id = ?",
+            """
+            UPDATE articles
+            SET
+                image_path = ?,
+                generated_poster_image = CASE
+                    WHEN generated_poster_image IS NULL OR TRIM(generated_poster_image) = '' THEN ?
+                    ELSE generated_poster_image
+                END,
+                updated_at = ?
+            WHERE id = ?
+            """,
             updates,
         )
         conn.commit()
@@ -612,6 +808,10 @@ def set_article_status(article_id, status):
             UPDATE articles
             SET
                 status = :status,
+                approval_status = CASE
+                    WHEN :status IN ('pending', 'approved', 'rejected') THEN :status
+                    ELSE approval_status
+                END,
                 reviewed_at = CASE
                     WHEN :status IN ('approved', 'rejected') THEN :timestamp
                     ELSE reviewed_at
@@ -657,6 +857,10 @@ def set_articles_status(article_ids, status):
             UPDATE articles
             SET
                 status = :status,
+                approval_status = CASE
+                    WHEN :status IN ('pending', 'approved', 'rejected') THEN :status
+                    ELSE approval_status
+                END,
                 reviewed_at = CASE
                     WHEN :status IN ('approved', 'rejected') THEN :timestamp
                     ELSE reviewed_at
@@ -680,6 +884,437 @@ def set_articles_status(article_ids, status):
     return rowcount
 
 
+def article_to_dict(article):
+    return dict(article) if article else None
+
+
+def update_article_facebook_fields(article_id, **fields):
+    allowed = {
+        "facebook_posted",
+        "facebook_post_id",
+        "facebook_permalink",
+        "facebook_published_at",
+        "facebook_publish_status",
+        "facebook_publish_error",
+        "facebook_caption",
+        "generated_poster_image",
+    }
+    updates = {key: value for key, value in fields.items() if key in allowed}
+    if not updates:
+        return
+
+    updates["updated_at"] = now_iso()
+    assignments = ", ".join(f"{key} = :{key}" for key in updates)
+    updates["id"] = int(article_id)
+    with connect_db() as conn:
+        conn.execute(
+            f"UPDATE articles SET {assignments} WHERE id = :id",
+            updates,
+        )
+        conn.commit()
+
+
+def clear_article_facebook_fields(article_ids):
+    ids = [int(article_id) for article_id in (article_ids or []) if str(article_id).isdigit()]
+    if not ids:
+        return 0
+
+    placeholders = ",".join("?" for _ in ids)
+    timestamp = now_iso()
+    with connect_db() as conn:
+        cursor = conn.execute(
+            f"""
+            UPDATE articles
+            SET
+                facebook_posted = 0,
+                facebook_post_id = '',
+                facebook_permalink = '',
+                facebook_published_at = '',
+                facebook_publish_status = 'not_posted',
+                facebook_publish_error = '',
+                updated_at = ?
+            WHERE id IN ({placeholders})
+            """,
+            [timestamp, *ids],
+        )
+        conn.commit()
+        return cursor.rowcount
+
+
+def article_is_approved_for_facebook(article):
+    if not article:
+        return False
+    status = str(article.get("status") or "").strip()
+    return status == "approved"
+
+
+def article_facebook_status(article):
+    raw_status = str(article.get("facebook_publish_status") or "").strip()
+    if int(article.get("facebook_posted") or 0) and raw_status in {"", "not_posted"}:
+        return "success"
+    if raw_status:
+        return raw_status
+    return "success" if int(article.get("facebook_posted") or 0) else "not_posted"
+
+
+def article_facebook_result_data(article, caption=""):
+    return {
+        "article_id": int(article.get("id")),
+        "facebook_post_id": article.get("facebook_post_id") or "",
+        "facebook_permalink": article.get("facebook_permalink") or "",
+        "facebook_caption": caption or article.get("facebook_caption") or "",
+    }
+
+
+def publish_article_to_facebook(article_id):
+    if not str(article_id).isdigit():
+        return {
+            "success": False,
+            "message": "Article không hợp lệ.",
+            "error": "article_id phải là số.",
+        }, HTTPStatus.BAD_REQUEST
+
+    article = article_to_dict(get_article(int(article_id)))
+    if not article:
+        return {
+            "success": False,
+            "message": "Không tìm thấy bài viết.",
+            "error": "Article không tồn tại.",
+        }, HTTPStatus.NOT_FOUND
+
+    if not article_is_approved_for_facebook(article):
+        return {
+            "success": False,
+            "message": "Chỉ bài đã duyệt mới được đăng Facebook.",
+            "error": "Bài viết chưa được duyệt.",
+            "data": {"article_id": int(article["id"])},
+        }, HTTPStatus.BAD_REQUEST
+
+    if int(article.get("facebook_posted") or 0):
+        return {
+            "success": False,
+            "message": "Bài viết đã được đăng Facebook.",
+            "error": "Bài viết đã được đăng Facebook.",
+            "data": article_facebook_result_data(article),
+        }, HTTPStatus.CONFLICT
+
+    poster_path, article = resolve_article_facebook_image(article)
+    if not poster_path:
+        return {
+            "success": False,
+            "message": "Không tìm thấy ảnh ấn phẩm để đăng Facebook.",
+            "error": "Không tạo được ảnh ấn phẩm cho bài viết.",
+            "data": {"article_id": int(article["id"])},
+        }, HTTPStatus.BAD_GATEWAY
+
+    caption = buildFacebookCaption(article)
+    poster_image = str(article.get("generated_poster_image") or "").strip()
+    article["facebook_caption"] = caption
+
+    LOGGER.info("Bat dau dang Facebook article_id=%s", article["id"])
+    LOGGER.info("Article ID=%s caption_da_tao=%s", article["id"], caption)
+    update_article_facebook_fields(
+        article["id"],
+        facebook_caption=caption,
+        facebook_publish_status="posting",
+        facebook_publish_error="",
+        generated_poster_image=poster_image,
+    )
+
+    try:
+        response = publishPhotoPost(caption, poster_path)
+        photo_id = str(response.get("id") or "").strip()
+        post_id = str(response.get("post_id") or photo_id).strip()
+        if not post_id:
+            raise FacebookPublishError("Facebook API khong tra ve post_id.")
+
+        permalink = ""
+        post_info_error = ""
+        try:
+            post_info = getPostInfo(post_id)
+            permalink = str(post_info.get("permalink_url") or "").strip()
+            LOGGER.info("Permalink URL article_id=%s url=%s", article["id"], permalink)
+        except FacebookPublishError as exc:
+            post_info_error = f"Da dang thanh cong nhung chua lay duoc permalink: {exc}"
+            LOGGER.warning(post_info_error)
+
+        published_at = now_iso()
+        update_article_facebook_fields(
+            article["id"],
+            facebook_posted=1,
+            facebook_post_id=post_id,
+            facebook_permalink=permalink,
+            facebook_published_at=published_at,
+            facebook_publish_status="success",
+            facebook_publish_error=post_info_error,
+            facebook_caption=caption,
+        )
+        LOGGER.info(
+            "Dang Facebook thanh cong article_id=%s post_id=%s permalink=%s",
+            article["id"],
+            post_id,
+            permalink,
+        )
+        return {
+            "success": True,
+            "message": "Đăng Facebook thành công.",
+            "data": {
+                "article_id": int(article["id"]),
+                "facebook_post_id": post_id,
+                "facebook_photo_id": photo_id,
+                "facebook_permalink": permalink,
+                "facebook_caption": caption,
+            },
+        }, HTTPStatus.OK
+    except (FacebookConfigError, FacebookAPIError, FacebookPublishError) as exc:
+        safe_error = str(exc)[:1000]
+        LOGGER.error("Dang Facebook that bai article_id=%s error=%s", article["id"], safe_error)
+    except Exception as exc:
+        safe_error = str(exc)[:1000]
+        LOGGER.exception("Dang Facebook loi khong mong doi article_id=%s", article["id"])
+
+    update_article_facebook_fields(
+        article["id"],
+        facebook_publish_status="failed",
+        facebook_publish_error=safe_error,
+        facebook_caption=caption,
+    )
+    return {
+        "success": False,
+        "message": "Đăng Facebook thất bại.",
+        "error": safe_error,
+        "data": {"article_id": int(article["id"]), "facebook_caption": caption},
+    }, HTTPStatus.BAD_GATEWAY
+
+
+def publish_articles_to_facebook_bulk(article_ids, delay_seconds=1.2):
+    clean_ids = []
+    seen_ids = set()
+    for raw_id in article_ids or []:
+        if str(raw_id).isdigit():
+            article_id = int(raw_id)
+            if article_id not in seen_ids:
+                clean_ids.append(article_id)
+                seen_ids.add(article_id)
+
+    if not clean_ids:
+        return {
+            "success": False,
+            "message": "Chưa chọn bài viết nào.",
+            "post_count": 0,
+            "results": [],
+        }
+
+    if len(clean_ids) == 1:
+        article_id = clean_ids[0]
+        result, status_code = publish_article_to_facebook(article_id)
+        data = result.get("data") or {}
+        if result.get("success"):
+            status = "success"
+            item = {
+                "article_id": article_id,
+                "status": status,
+                "facebook_post_id": data.get("facebook_post_id", ""),
+                "facebook_permalink": data.get("facebook_permalink", ""),
+            }
+        elif status_code in {HTTPStatus.BAD_REQUEST, HTTPStatus.CONFLICT}:
+            item = {
+                "article_id": article_id,
+                "status": "skipped",
+                "reason": result.get("message") or result.get("error") or "Bỏ qua bài viết.",
+            }
+        else:
+            item = {
+                "article_id": article_id,
+                "status": "failed",
+                "error": result.get("error") or result.get("message") or "Đăng Facebook thất bại.",
+            }
+        return {
+            "success": result.get("success", False),
+            "message": result.get("message") or "Hoàn tất xử lý đăng Facebook.",
+            "post_count": 1 if result.get("success") else 0,
+            "results": [item],
+        }
+
+    placeholders = ",".join("?" for _ in clean_ids)
+    with connect_db() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM articles WHERE id IN ({placeholders})",
+            clean_ids,
+        ).fetchall()
+    articles_by_id = {int(row["id"]): article_to_dict(row) for row in rows}
+
+    results = []
+    publish_articles = []
+    image_paths = []
+
+    for article_id in clean_ids:
+        article = articles_by_id.get(article_id)
+        if not article:
+            results.append(
+                {
+                    "article_id": article_id,
+                    "status": "skipped",
+                    "reason": "Không tìm thấy bài viết.",
+                }
+            )
+            continue
+        if not article_is_approved_for_facebook(article):
+            results.append(
+                {
+                    "article_id": article_id,
+                    "status": "skipped",
+                    "reason": "Chỉ bài đã duyệt mới được đăng Facebook.",
+                }
+            )
+            continue
+        if int(article.get("facebook_posted") or 0):
+            results.append(
+                {
+                    "article_id": article_id,
+                    "status": "skipped",
+                    "reason": "Bài viết đã được đăng Facebook.",
+                    "facebook_post_id": article.get("facebook_post_id") or "",
+                    "facebook_permalink": article.get("facebook_permalink") or "",
+                }
+            )
+            continue
+
+        image_path, refreshed = resolve_article_facebook_image(article)
+        if not image_path:
+            results.append(
+                {
+                    "article_id": article_id,
+                    "status": "failed",
+                    "error": "Không tạo được ảnh ấn phẩm cho bài viết.",
+                }
+            )
+            continue
+        publish_articles.append(refreshed)
+        image_paths.append(image_path)
+
+    if not publish_articles:
+        return {
+            "success": False,
+            "message": "Không có bài hợp lệ để đăng Facebook.",
+            "post_count": 0,
+            "results": results,
+        }
+
+    if len(publish_articles) == 1:
+        result, status_code = publish_article_to_facebook(publish_articles[0]["id"])
+        data = result.get("data") or {}
+        item = {
+            "article_id": int(publish_articles[0]["id"]),
+            "status": "success" if result.get("success") else "failed",
+            "facebook_post_id": data.get("facebook_post_id", ""),
+            "facebook_permalink": data.get("facebook_permalink", ""),
+        }
+        if not result.get("success"):
+            item["error"] = result.get("error") or result.get("message") or "Đăng Facebook thất bại."
+        results.append(item)
+        return {
+            "success": result.get("success", False),
+            "message": result.get("message") or "Hoàn tất xử lý đăng Facebook.",
+            "post_count": 1 if result.get("success") else 0,
+            "results": results,
+        }
+
+    caption = build_facebook_bulk_caption(publish_articles)
+    for article in publish_articles:
+        update_article_facebook_fields(
+            article["id"],
+            facebook_caption=caption,
+            facebook_publish_status="posting",
+            facebook_publish_error="",
+        )
+
+    try:
+        response = publishMultiPhotoPost(caption, image_paths)
+        photo_id = str(response.get("id") or "").strip()
+        post_id = str(response.get("post_id") or photo_id).strip()
+        if not post_id:
+            raise FacebookPublishError("Facebook API khong tra ve post_id.")
+
+        permalink = ""
+        post_info_error = ""
+        try:
+            post_info = getPostInfo(post_id)
+            permalink = str(post_info.get("permalink_url") or "").strip()
+        except FacebookPublishError as exc:
+            post_info_error = f"Da dang thanh cong nhung chua lay duoc permalink: {exc}"
+            LOGGER.warning(post_info_error)
+
+        published_at = now_iso()
+        for article in publish_articles:
+            update_article_facebook_fields(
+                article["id"],
+                facebook_posted=1,
+                facebook_post_id=post_id,
+                facebook_permalink=permalink,
+                facebook_published_at=published_at,
+                facebook_publish_status="success",
+                facebook_publish_error=post_info_error,
+                facebook_caption=caption,
+            )
+            results.append(
+                {
+                    "article_id": int(article["id"]),
+                    "status": "success",
+                    "facebook_post_id": post_id,
+                    "facebook_photo_id": photo_id,
+                    "facebook_permalink": permalink,
+                }
+            )
+        return {
+            "success": True,
+            "message": f"Đã đăng 1 bài Facebook gồm {len(publish_articles)} ảnh ấn phẩm.",
+            "post_count": 1,
+            "facebook_post_id": post_id,
+            "facebook_photo_id": photo_id,
+            "facebook_permalink": permalink,
+            "results": results,
+        }
+    except (FacebookConfigError, FacebookAPIError, FacebookPublishError) as exc:
+        safe_error = str(exc)[:1000]
+        LOGGER.error("Dang Facebook bulk that bai ids=%s error=%s", clean_ids, safe_error)
+    except Exception as exc:
+        safe_error = str(exc)[:1000]
+        LOGGER.exception("Dang Facebook bulk loi khong mong doi ids=%s", clean_ids)
+
+    for article in publish_articles:
+        update_article_facebook_fields(
+            article["id"],
+            facebook_publish_status="failed",
+            facebook_publish_error=safe_error,
+            facebook_caption=caption,
+        )
+        results.append(
+            {
+                "article_id": int(article["id"]),
+                "status": "failed",
+                "error": safe_error,
+            }
+        )
+
+    return {
+        "success": False,
+        "message": "Đăng Facebook thất bại.",
+        "post_count": 0,
+        "results": results,
+    }
+
+
+def summarize_facebook_bulk_result(result):
+    results = result.get("results") or []
+    sent = sum(1 for item in results if item.get("status") == "success")
+    skipped = sum(1 for item in results if item.get("status") == "skipped")
+    failed = sum(1 for item in results if item.get("status") == "failed")
+    if result.get("post_count") == 1 and sent > 1:
+        return f"Facebook: Đã đăng bài viết cho {sent} bài đã chọn, bỏ qua {skipped}, lỗi {failed}."
+    return f"Facebook: Đã đăng bài viết cho {sent} bài đã chọn, bỏ qua {skipped}, lỗi {failed}."
+
+
 def create_uploaded_article(fields, file_part):
     title = fields.get("title", "").strip()
     if not title:
@@ -698,8 +1333,9 @@ def create_uploaded_article(fields, file_part):
             INSERT INTO articles (
                 source, title, url, crawled_at, published_at, thumbnail, summary,
                 newspaper_type, content_topic, category, image_path,
-                status, created_at, updated_at, approved_at, reviewed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                generated_poster_image, approval_status, status,
+                created_at, updated_at, approved_at, reviewed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 fields.get("source", "Admin upload").strip() or "Admin upload",
@@ -713,6 +1349,8 @@ def create_uploaded_article(fields, file_part):
                 fields.get("content_topic", "").strip(),
                 fields.get("category", "").strip(),
                 image_path,
+                image_path,
+                status,
                 status,
                 timestamp,
                 timestamp,
@@ -1065,6 +1703,46 @@ def get_data_quality_warnings(conn, columns, source_counts):
     }
 
 
+def get_facebook_dashboard_counts(conn, columns):
+    counts = {
+        "posted": 0,
+        "approved_not_posted": 0,
+        "failed": 0,
+        "posting": 0,
+    }
+    if "facebook_posted" not in columns and "facebook_publish_status" not in columns:
+        return counts
+
+    facebook_posted_expr = (
+        "COALESCE(facebook_posted, 0)"
+        if "facebook_posted" in columns
+        else "CASE WHEN facebook_publish_status = 'success' THEN 1 ELSE 0 END"
+    )
+    facebook_status_expr = (
+        "COALESCE(NULLIF(TRIM(facebook_publish_status), ''), 'not_posted')"
+        if "facebook_publish_status" in columns
+        else "CASE WHEN COALESCE(facebook_posted, 0) = 1 THEN 'success' ELSE 'not_posted' END"
+    )
+    status_filter = "status = 'approved'" if "status" in columns else "1 = 1"
+
+    row = conn.execute(
+        f"""
+        SELECT
+            SUM(CASE WHEN {facebook_posted_expr} = 1 OR {facebook_status_expr} = 'success' THEN 1 ELSE 0 END) AS posted,
+            SUM(CASE WHEN {status_filter} AND {facebook_posted_expr} != 1 AND {facebook_status_expr} NOT IN ('success', 'posting') THEN 1 ELSE 0 END) AS approved_not_posted,
+            SUM(CASE WHEN {facebook_status_expr} = 'failed' THEN 1 ELSE 0 END) AS failed,
+            SUM(CASE WHEN {facebook_status_expr} = 'posting' THEN 1 ELSE 0 END) AS posting
+        FROM articles
+        """
+    ).fetchone()
+    if not row:
+        return counts
+
+    for key in counts:
+        counts[key] = int(row[key] or 0)
+    return counts
+
+
 def get_admin_dashboard_stats():
     stats = {
         "db_path": str(DB_PATH),
@@ -1077,6 +1755,12 @@ def get_admin_dashboard_stats():
         "topic_counts": [],
         "recent_articles": [],
         "warnings": {"items": []},
+        "facebook_counts": {
+            "posted": 0,
+            "approved_not_posted": 0,
+            "failed": 0,
+            "posting": 0,
+        },
         "latest_crawled_at": "",
         "columns": set(),
     }
@@ -1098,6 +1782,7 @@ def get_admin_dashboard_stats():
             source_counts = get_source_counts(conn, columns)
             topic_counts = get_topic_counts(conn, columns)
             recent_articles = get_recent_articles(conn, columns)
+            facebook_counts = get_facebook_dashboard_counts(conn, columns)
             latest_crawled_at = ""
             if "published_at" in columns:
                 row = conn.execute(
@@ -1112,18 +1797,22 @@ def get_admin_dashboard_stats():
             warnings = get_data_quality_warnings(conn, columns, source_counts)
 
             cards = [
-                {"label": "Tổng số bài viết", "value": total, "tone": "blue"},
-                {"label": "Đã đăng / approved", "value": status_counts["published"], "tone": "green"},
-                {"label": "Chờ duyệt / pending", "value": status_counts["pending"], "tone": "amber"},
-                {"label": "Bị từ chối / rejected", "value": status_counts["rejected"], "tone": "red"},
+                {"label": "Tổng số bài viết", "value": total, "tone": "blue", "group": "overview"},
+                {"label": "Đã đăng / approved", "value": status_counts["published"], "tone": "green", "group": "overview"},
+                {"label": "Chờ duyệt / pending", "value": status_counts["pending"], "tone": "amber", "group": "overview"},
+                {"label": "Bị từ chối / rejected", "value": status_counts["rejected"], "tone": "red", "group": "overview"},
             ]
             if "status" in columns:
-                cards.append({"label": "Đã xóa / deleted", "value": status_counts["deleted"], "tone": "muted"})
+                cards.append({"label": "Đã xóa / deleted", "value": status_counts["deleted"], "tone": "muted", "group": "overview"})
             cards.extend([
-                {"label": "Thiếu summary", "value": warnings["missing_summary"], "tone": "amber"},
-                {"label": "Thiếu thumbnail", "value": warnings["missing_thumbnail"], "tone": "amber"},
-                {"label": "Nguồn báo có dữ liệu", "value": len(source_counts), "tone": "blue"},
-                {"label": "Ngày đăng mới nhất", "value": latest_crawled_at or "Chưa có", "tone": "muted", "wide": True},
+                {"label": "Đã đăng Facebook", "value": facebook_counts["posted"], "tone": "facebook", "group": "facebook"},
+                {"label": "Đã duyệt chưa đăng FB", "value": facebook_counts["approved_not_posted"], "tone": "blue", "group": "facebook"},
+                {"label": "Lỗi đăng Facebook", "value": facebook_counts["failed"], "tone": "red", "group": "facebook"},
+                {"label": "Đang đăng Facebook", "value": facebook_counts["posting"], "tone": "amber", "group": "facebook"},
+                {"label": "Thiếu summary", "value": warnings["missing_summary"], "tone": "amber", "group": "quality"},
+                {"label": "Thiếu thumbnail", "value": warnings["missing_thumbnail"], "tone": "amber", "group": "quality"},
+                {"label": "Nguồn báo có dữ liệu", "value": len(source_counts), "tone": "blue", "group": "quality"},
+                {"label": "Ngày đăng mới nhất", "value": latest_crawled_at or "Chưa có", "tone": "muted", "wide": True, "group": "quality"},
             ])
 
             stats.update({
@@ -1135,6 +1824,7 @@ def get_admin_dashboard_stats():
                 "topic_counts": topic_counts,
                 "recent_articles": recent_articles,
                 "warnings": warnings,
+                "facebook_counts": facebook_counts,
                 "latest_crawled_at": latest_crawled_at,
             })
     except sqlite3.Error as exc:
@@ -1155,16 +1845,19 @@ def make_media_url(path_or_url):
 def article_image_url(article):
     if isinstance(article, sqlite3.Row):
         title = article["title"] or ""
+        generated_poster_image = article["generated_poster_image"] or ""
         image_path = article["image_path"] or ""
         thumbnail = article["thumbnail"] or ""
     else:
         title = article.get("title", "")
+        generated_poster_image = article.get("generated_poster_image", "")
         image_path = article.get("image_path", "")
         thumbnail = article.get("thumbnail", "")
 
-    local_image = to_relative_media_path(image_path)
+    local_image = to_relative_media_path(generated_poster_image) or to_relative_media_path(image_path)
     rendered = find_rendered_image(title)
-    return make_media_url(local_image or rendered or thumbnail)
+    fallback = DEFAULT_THUMBNAIL if (BASE_DIR / DEFAULT_THUMBNAIL).exists() else ""
+    return make_media_url(local_image or rendered or thumbnail or fallback)
 
 
 def article_target_url(article):
@@ -1192,7 +1885,7 @@ def article_display_summary(article, context="client"):
     if summary:
         return summary
 
-    source = str(article["source"] or "IEC News").strip()
+    source = str(article["source"] or "PNews").strip()
     topic = str(article["category"] or article["content_topic"] or "Tin tức").strip()
     title = str(article["title"] or "bài viết này").strip()
 
@@ -1287,18 +1980,14 @@ def render_client_page(title, body, extra_class=""):
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{escape(title)} - IEC News</title>
-  <link rel="stylesheet" href="/assets/styles.css">
-  <script src="/assets/app.js" defer></script>
+  <title>{escape(title)} - PNews</title>
+  <link rel="stylesheet" href="/assets/styles.css?v={ASSET_VERSION}">
+  <script src="/assets/app.js?v={ASSET_VERSION}" defer></script>
 </head>
 <body class="client-app {escape(extra_class)}">
   <header class="client-topbar">
-    <a class="brand" href="/client">
-      <span class="brand-mark">IEC</span>
-      <span>
-        <strong>IEC News</strong>
-        <small>Ấn phẩm đã được biên tập duyệt</small>
-      </span>
+    <a class="brand brand-logo-link" href="/client" aria-label="PNews">
+      <img class="site-logo client-logo" src="{SITE_LOGO_URL}" alt="PNews">
     </a>
     <a class="button ghost compact" href="/admin">Khu vực quản trị</a>
   </header>
@@ -1336,18 +2025,14 @@ def render_admin_page(title, body, extra_class="", active_nav="articles"):
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{escape(title)} - Quản trị IEC News</title>
-  <link rel="stylesheet" href="/assets/styles.css">
-  <script src="/assets/app.js" defer></script>
+  <title>{escape(title)} - Quản trị PNews</title>
+  <link rel="stylesheet" href="/assets/styles.css?v={ASSET_VERSION}">
+  <script src="/assets/app.js?v={ASSET_VERSION}" defer></script>
 </head>
 <body class="admin-app {escape(extra_class)}">
   <aside class="admin-sidebar">
-    <a class="brand admin-brand" href="/admin">
-      <span class="brand-mark">IEC</span>
-      <span>
-        <strong>Quản trị tin</strong>
-        <small>Kiểm duyệt và xuất bản</small>
-      </span>
+    <a class="brand admin-brand brand-logo-link" href="/admin" aria-label="PNews Admin">
+      <img class="site-logo admin-logo" src="{SITE_LOGO_URL}" alt="PNews">
     </a>
     <nav class="admin-nav">
       <a class="{dashboard_active}" href="/admin/dashboard">Tổng quan</a>
@@ -1385,9 +2070,9 @@ def render_auth_page(title, body):
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{escape(title)} - Quản trị IEC News</title>
-  <link rel="stylesheet" href="/assets/styles.css">
-  <script src="/assets/app.js" defer></script>
+  <title>{escape(title)} - Quản trị PNews</title>
+  <link rel="stylesheet" href="/assets/styles.css?v={ASSET_VERSION}">
+  <script src="/assets/app.js?v={ASSET_VERSION}" defer></script>
 </head>
 <body class="auth-app">
   <main class="auth-shell">
@@ -1417,19 +2102,19 @@ def render_chat_widget():
   <section class="chatbot-widget" data-chatbot>
     <button class="chatbot-toggle" type="button" data-chat-toggle aria-expanded="false">
       <span aria-hidden="true">💬</span>
-      <strong>Hỏi IEC News</strong>
+      <strong>Hỏi PNews</strong>
     </button>
     <div class="chatbot-panel" data-chat-panel aria-hidden="true">
       <header class="chatbot-head">
         <div>
-          <strong>IEC News Assistant</strong>
+          <strong>PNews Assistant</strong>
           <span>Hỏi nhanh tin tức mới nhất</span>
         </div>
         <button class="chatbot-close" type="button" data-chat-close aria-label="Đóng chat">×</button>
       </header>
       <div class="chatbot-messages" data-chat-messages>
         <article class="chat-message bot">
-          <p>Xin chào, tôi có thể giúp bạn tìm tin mới, tin theo chủ đề, nguồn báo hoặc tóm tắt các bài đã đăng trên IEC News.</p>
+          <p>Xin chào, tôi có thể giúp bạn tìm tin mới, tin theo chủ đề, nguồn báo hoặc tóm tắt các bài đã đăng trên PNews.</p>
         </article>
       </div>
       <div class="chatbot-suggestions" data-chat-suggestions>{chips}</div>
@@ -1561,7 +2246,7 @@ def render_client_card(article):
     image = (
         f'<img src="{escape(image_url)}" alt="{escape(article["title"])}" loading="lazy">'
         if image_url
-        else '<div class="image-fallback">IEC News</div>'
+        else '<div class="image-fallback">PNews</div>'
     )
     return f"""
     <article class="article-card">
@@ -1569,7 +2254,7 @@ def render_client_card(article):
       <div class="article-body">
         <a class="article-body-link" {link_attrs}>
           <span class="meta-line">
-            <span>{escape(article['source'] or 'IEC')}</span>
+            <span>{escape(article['source'] or 'PNews')}</span>
             <span>{escape(topic_label)}</span>
             <span>Ngày đăng: {escape(article['published_at'] or article['crawled_at'] or 'Chưa rõ')}</span>
           </span>
@@ -1590,7 +2275,7 @@ def render_article_detail(article_id):
     image = (
         f'<img src="{escape(image_url)}" alt="{escape(article["title"])}">'
         if image_url
-        else '<div class="image-fallback detail">IEC News</div>'
+        else '<div class="image-fallback detail">PNews</div>'
     )
     source_link = (
         f'<a class="button ghost" href="{escape(article["url"])}" target="_blank" rel="noopener">Mở bài gốc</a>'
@@ -1624,9 +2309,10 @@ def render_admin_login(error=""):
     body = f"""
     <section class="login-panel">
       <div>
+        <img class="site-logo login-logo" src="{SITE_LOGO_URL}" alt="PNews">
         <p class="eyebrow">Admin</p>
         <h1>Đăng nhập duyệt bài</h1>
-        <p>Mặc định: user <code>admin</code>, mật khẩu <code>admin123</code>. Có thể đổi bằng biến môi trường <code>IEC_ADMIN_USER</code> và <code>IEC_ADMIN_PASSWORD</code>.</p>
+        <p>Nhập tên đăng nhập và mật khẩu để truy cập khu vực quản trị, duyệt bài và xuất bản ấn phẩm.</p>
       </div>
       <form class="panel-form" method="post" action="/admin/login">
         {error_html}
@@ -1639,6 +2325,46 @@ def render_admin_login(error=""):
     return render_auth_page("Đăng nhập admin", body)
 
 
+def render_dashboard_card(card):
+    classes = f"dashboard-card tone-{escape(card['tone'])}"
+    if card.get("wide"):
+        classes += " wide"
+    return f"""
+        <article class="{classes}">
+          <span>{escape(card['label'])}</span>
+          <strong>{escape(card['value'])}</strong>
+        </article>
+        """
+
+
+def render_dashboard_card_sections(cards):
+    groups = [
+        ("overview", "Tổng quan bài viết"),
+        ("facebook", "Hoạt động Facebook"),
+        ("quality", "Chất lượng dữ liệu"),
+    ]
+    sections = []
+    for group_key, group_label in groups:
+        group_cards = [card for card in cards if card.get("group") == group_key]
+        if not group_cards:
+            continue
+        rendered_cards = "\n".join(render_dashboard_card(card) for card in group_cards)
+        sections.append(
+            f"""
+            <section class="dashboard-card-section">
+              <div class="dashboard-card-section-heading">
+                <h2>{escape(group_label)}</h2>
+              </div>
+              <div class="dashboard-grid">{rendered_cards}</div>
+            </section>
+            """
+        )
+    remaining_cards = [card for card in cards if card.get("group") not in {key for key, _label in groups}]
+    if remaining_cards:
+        sections.append(f'<section class="dashboard-grid">{"".join(render_dashboard_card(card) for card in remaining_cards)}</section>')
+    return "\n".join(sections)
+
+
 def render_admin_overview_dashboard():
     stats = get_admin_dashboard_stats()
     if not stats["ready"]:
@@ -1646,7 +2372,7 @@ def render_admin_overview_dashboard():
         <section class="admin-head">
           <div>
             <p class="eyebrow">Dashboard</p>
-            <h1>Tổng quan IEC News</h1>
+            <h1>Tổng quan PNews</h1>
             <p>Theo dõi nhanh dữ liệu bài viết, nguồn báo, trạng thái duyệt và chất lượng crawl.</p>
           </div>
           <div class="admin-actions">
@@ -1661,15 +2387,7 @@ def render_admin_overview_dashboard():
         """
         return render_admin_page("Dashboard", body, active_nav="dashboard")
 
-    cards = "\n".join(
-        f"""
-        <article class="dashboard-card tone-{escape(card['tone'])} {'wide' if card.get('wide') else ''}">
-          <span>{escape(card['label'])}</span>
-          <strong>{escape(card['value'])}</strong>
-        </article>
-        """
-        for card in stats["cards"]
-    )
+    cards = render_dashboard_card_sections(stats["cards"])
     source_rows = render_dashboard_metric_rows(stats["source_counts"], "Chưa có nguồn báo nào.")
     topic_rows = render_dashboard_metric_rows(stats["topic_counts"], "Chưa có dữ liệu chủ đề.")
     recent_rows = render_dashboard_recent_articles(stats["recent_articles"])
@@ -1680,12 +2398,12 @@ def render_admin_overview_dashboard():
     <section class="admin-head">
       <div>
         <p class="eyebrow">Dashboard</p>
-        <h1>Tổng quan IEC News</h1>
+        <h1>Tổng quan PNews</h1>
         <p>Theo dõi nhanh tình trạng dữ liệu tin tức, nguồn báo, chủ đề, trạng thái duyệt và hoạt động crawl.</p>
       </div>
       {render_admin_head_actions("dashboard")}
     </section>
-    <section class="dashboard-grid">{cards}</section>
+    <div class="dashboard-card-sections">{cards}</div>
     <section class="dashboard-panels">
       <article class="dashboard-panel">
         <div class="panel-heading">
@@ -2008,16 +2726,100 @@ def render_bulk_actions(status):
     }
     buttons = []
     for action, label, variant in actions_by_status.get(status, []):
-        confirm = ' data-confirm-bulk="Bạn chưa chọn bài nào."' if action else ""
+        confirm = ' data-requires-selection data-confirm-bulk="Bạn chưa chọn bài nào." disabled aria-disabled="true"' if action else ""
         buttons.append(
             f'<button class="button {variant}" name="bulk_action" value="{action}" type="submit"{confirm}>{label}</button>'
         )
     if status == "approved":
         buttons.insert(
             0,
-            '<button class="button primary" type="button" data-export-selected-png data-confirm-bulk="Bạn chưa chọn bài nào." disabled aria-disabled="true">Export PNG</button>',
+            '<button class="button ghost" name="bulk_action" value="clear_facebook" type="submit" data-requires-selection data-confirm-bulk="Bạn chưa chọn bài nào." data-confirm="Gỡ tag Đã đăng FB cho các bài đã chọn? Thao tác này không xóa bài trên Facebook." disabled aria-disabled="true">Gỡ tag FB đã chọn</button>',
+        )
+        buttons.insert(
+            0,
+            '<button class="button primary" name="bulk_action" value="publish_facebook" type="submit" formaction="/admin/articles/publish-facebook-bulk" data-requires-selection data-confirm-bulk="Bạn chưa chọn bài nào." data-confirm="Bạn có chắc chắn muốn đăng các bài đã chọn lên Facebook Page không?" disabled aria-disabled="true">Đăng Facebook các bài đã chọn</button>',
+        )
+        buttons.insert(
+            0,
+            '<button class="button primary" type="button" data-export-selected-png data-requires-selection data-confirm-bulk="Bạn chưa chọn bài nào." disabled aria-disabled="true">Export PNG</button>',
         )
     return "".join(buttons)
+
+
+def render_facebook_status_badge(article):
+    data = article_to_dict(article)
+    status = article_facebook_status(data)
+    label = FACEBOOK_STATUS_LABELS.get(status, status or "Chưa đăng")
+    error = data.get("facebook_publish_error") or ""
+    title = f' title="{escape(error)}"' if error else ""
+    return f'<span class="badge facebook-badge facebook-{escape(status)}"{title}>Facebook: {escape(label)}</span>'
+
+
+def render_facebook_publish_actions(article):
+    data = article_to_dict(article)
+    status = article_facebook_status(data)
+    permalink = str(data.get("facebook_permalink") or "").strip()
+    posted = int(data.get("facebook_posted") or 0) == 1 or status == "success"
+    actions = []
+
+    if posted:
+        actions.append(
+            '<button class="button ghost" type="button" disabled aria-disabled="true">Đã đăng Facebook</button>'
+        )
+        actions.append(
+            f'<button class="button ghost" type="submit" formaction="/admin/articles/{data["id"]}/clear-facebook" data-confirm="Gỡ tag Đã đăng FB để có thể đăng lại bài này? Thao tác này không xóa bài trên Facebook.">Gỡ tag FB</button>'
+        )
+    elif status == "posting":
+        actions.append(
+            '<button class="button ghost" type="button" disabled aria-disabled="true">Đang đăng Facebook</button>'
+        )
+    else:
+        label = "Thử lại Facebook" if status == "failed" else "Đăng Facebook"
+        actions.append(
+            f'<button class="button primary" type="submit" formaction="/admin/articles/{data["id"]}/publish-facebook" data-confirm="Bạn có chắc chắn muốn đăng bài này lên Facebook Page không?">{escape(label)}</button>'
+        )
+
+    if permalink:
+        actions.append(
+            f'<a class="button ghost" href="{escape(permalink)}" target="_blank" rel="noopener">Xem trên Facebook</a>'
+        )
+    return "".join(actions)
+
+
+def render_facebook_preview(article):
+    data = article_to_dict(article)
+    if data.get("status") != "approved":
+        return ""
+
+    caption = data.get("facebook_caption") or buildFacebookCaption(data)
+    image_url = article_image_url(article)
+    image = (
+        f'<img src="{escape(image_url)}" alt="{escape(data.get("title"))}" loading="lazy">'
+        if image_url
+        else '<div class="facebook-preview-fallback">PNews</div>'
+    )
+    source = data.get("source") or "PNews"
+    url = str(data.get("url") or "").strip()
+    link = (
+        f'<a href="{escape(url)}" target="_blank" rel="noopener">{escape(url)}</a>'
+        if url
+        else '<span>Không có link bài viết</span>'
+    )
+    return f"""
+        <details class="facebook-preview">
+          <summary>Facebook Preview</summary>
+          <div class="facebook-preview-body">
+            <div class="facebook-preview-image">{image}</div>
+            <div class="facebook-preview-copy">
+              <pre>{escape(caption)}</pre>
+              <div class="facebook-preview-meta">
+                <span>Nguồn: {escape(source)}</span>
+                <span>{link}</span>
+              </div>
+            </div>
+          </div>
+        </details>
+    """
 
 
 def render_admin_article(article):
@@ -2029,7 +2831,7 @@ def render_admin_article(article):
     image = (
         f'<img src="{escape(image_url)}" alt="{escape(article["title"])}" loading="lazy">'
         if image_url
-        else '<div class="image-fallback admin">IEC</div>'
+        else '<div class="image-fallback admin">PNews</div>'
     )
     approve = action_button(article["id"], "approve", "Duyệt", "success")
     reject = action_button(article["id"], "reject", "Từ chối", "ghost")
@@ -2040,10 +2842,13 @@ def render_admin_article(article):
         if article["status"] == "approved"
         else ""
     )
+    facebook_badge = render_facebook_status_badge(article) if article["status"] == "approved" else ""
+    facebook_actions = render_facebook_publish_actions(article) if article["status"] == "approved" else ""
+    facebook_preview = render_facebook_preview(article)
 
     actions = {
         "pending": approve + reject + delete,
-        "approved": export_png + reject + delete,
+        "approved": facebook_actions + export_png + reject + delete,
         "rejected": approve + delete,
         "deleted": restore,
     }.get(article["status"], approve + delete)
@@ -2071,11 +2876,13 @@ def render_admin_article(article):
           <span>{escape(article['source'] or 'Admin')}</span>
           <span>{escape(topic_label or 'Chưa phân loại')}</span>
           <span class="badge">{escape(STATUS_LABELS.get(article['status'], article['status']))}</span>
+          {facebook_badge}
         </div>
         <div class="review-click-zone" {click_attrs}>
           <h2><a class="review-title-link" {link_attrs}>{escape(article['title'])}</a></h2>
           <p><a class="review-summary-link" {link_attrs}>{escape(summary_text)}</a></p>
         </div>
+        {facebook_preview}
         <div class="date-line">{date_line}</div>
       </div>
       <div class="review-actions">{actions}</div>
@@ -2132,7 +2939,7 @@ def render_upload_form(error="", success=""):
       <label>Tiêu đề<input name="title" required placeholder="Nhập tiêu đề bài viết hoặc ấn phẩm"></label>
       <label>Tóm tắt<textarea name="summary" rows="4" placeholder="Nội dung ngắn hiển thị trên client"></textarea></label>
       <div class="form-grid">
-        <label>Nguồn<input name="source" placeholder="IEC, VNExpress..."></label>
+        <label>Nguồn<input name="source" placeholder="PNews, VNExpress..."></label>
         <label>Chủ đề<input name="content_topic" placeholder="Công nghệ, giáo dục..."></label>
         <label>Chuyên mục<input name="category" placeholder="Tin tức, sự kiện..."></label>
         <label>Link bài gốc<input name="url" type="url" placeholder="https://..."></label>
@@ -2213,7 +3020,7 @@ def parse_part_headers(header_blob):
 
 
 class CMSHandler(BaseHTTPRequestHandler):
-    server_version = "IECNewsCMS/1.0"
+    server_version = "PNewsCMS/1.0"
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -2266,6 +3073,12 @@ class CMSHandler(BaseHTTPRequestHandler):
             self.require_admin(self.handle_upload)
         elif path == "/admin/bulk":
             self.require_admin(self.handle_bulk_action)
+        elif re.fullmatch(r"/admin/articles/\d+/publish-facebook", path):
+            self.require_admin(lambda: self.handle_facebook_publish_single(path))
+        elif re.fullmatch(r"/admin/articles/\d+/clear-facebook", path):
+            self.require_admin(lambda: self.handle_facebook_clear_single(path))
+        elif path == "/admin/articles/publish-facebook-bulk":
+            self.require_admin(self.handle_facebook_publish_bulk)
         elif path.startswith("/admin/articles/"):
             self.require_admin(lambda: self.handle_article_action(path))
         elif path == "/api/chat":
@@ -2275,16 +3088,20 @@ class CMSHandler(BaseHTTPRequestHandler):
 
     def handle_login(self):
         fields = self.read_form()
-        if (
-            fields.get("username") == ADMIN_USERNAME
-            and fields.get("password") == ADMIN_PASSWORD
-        ):
+        username = fields.get("username", "")
+        password = fields.get("password", "")
+        expected_password = ADMIN_ACCOUNTS.get(username)
+        if expected_password and secrets.compare_digest(expected_password, password):
             session_id = secrets.token_urlsafe(32)
             SESSIONS.add(session_id)
             self.send_response(HTTPStatus.SEE_OTHER)
             self.send_header("Location", "/admin")
             self.send_header("Set-Cookie", f"{SESSION_COOKIE}={session_id}; HttpOnly; SameSite=Lax; Path=/")
+            self.send_no_cache_headers()
             self.end_headers()
+            return
+        if not ADMIN_ACCOUNTS:
+            self.respond_html(render_admin_login("Chưa cấu hình tài khoản admin."), HTTPStatus.UNAUTHORIZED)
             return
         self.respond_html(render_admin_login("Sai thông tin đăng nhập."), HTTPStatus.UNAUTHORIZED)
 
@@ -2295,6 +3112,7 @@ class CMSHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.SEE_OTHER)
         self.send_header("Location", "/admin")
         self.send_header("Set-Cookie", f"{SESSION_COOKIE}=; Max-Age=0; Path=/")
+        self.send_no_cache_headers()
         self.end_headers()
 
     def handle_upload(self):
@@ -2345,7 +3163,11 @@ class CMSHandler(BaseHTTPRequestHandler):
                     seen_ids.add(article_id)
 
         notice = ""
-        if action in status_map and clean_ids:
+        if action == "clear_facebook" and clean_ids:
+            cleared = clear_article_facebook_fields(clean_ids)
+            return_status = "approved"
+            notice = f"Đã gỡ tag Facebook cho {cleared} bài. Có thể đăng lại các bài này."
+        elif action in status_map and clean_ids:
             set_articles_status(clean_ids, status_map[action])
             return_status = "pending" if action == "restore" else status_map[action]
             if action == "approve":
@@ -2360,6 +3182,121 @@ class CMSHandler(BaseHTTPRequestHandler):
                 date_filter=return_date,
                 notice=notice,
                 page=return_page,
+            )
+        )
+
+    def handle_facebook_publish_single(self, path):
+        match = re.fullmatch(r"/admin/articles/(\d+)/publish-facebook", path)
+        if not match:
+            self.respond_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+
+        wants_json = self.request_wants_json()
+        fields = {}
+        if wants_json and self.headers.get("Content-Length", "0") != "0":
+            payload = self.read_json_payload()
+            if payload is None:
+                return
+        else:
+            fields = self.read_form_multi()
+
+        result, status_code = publish_article_to_facebook(int(match.group(1)))
+        if wants_json:
+            self.respond_json(result, status_code)
+            return
+
+        notice = result.get("message", "")
+        if not result.get("success") and result.get("error"):
+            notice = f"{notice} {result['error']}".strip()
+        self.redirect(self.admin_return_url_from_fields(fields, default_status="approved", notice=notice))
+
+    def handle_facebook_clear_single(self, path):
+        match = re.fullmatch(r"/admin/articles/(\d+)/clear-facebook", path)
+        if not match:
+            self.respond_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+
+        wants_json = self.request_wants_json()
+        fields = {}
+        if wants_json and self.headers.get("Content-Length", "0") != "0":
+            payload = self.read_json_payload()
+            if payload is None:
+                return
+        else:
+            fields = self.read_form_multi()
+
+        article_id = int(match.group(1))
+        article = article_to_dict(get_article(article_id))
+        if not article:
+            result = {
+                "success": False,
+                "message": "Không tìm thấy bài viết.",
+                "data": {"article_id": article_id},
+            }
+            if wants_json:
+                self.respond_json(result, HTTPStatus.NOT_FOUND)
+                return
+            self.redirect(self.admin_return_url_from_fields(fields, default_status="approved", notice=result["message"]))
+            return
+
+        cleared = clear_article_facebook_fields([article_id])
+        result = {
+            "success": bool(cleared),
+            "message": "Đã gỡ tag Facebook. Có thể đăng lại bài này.",
+            "data": {"article_id": article_id, "cleared": cleared},
+        }
+        if wants_json:
+            self.respond_json(result)
+            return
+
+        self.redirect(self.admin_return_url_from_fields(fields, default_status="approved", notice=result["message"]))
+
+    def handle_facebook_publish_bulk(self):
+        wants_json = self.request_wants_json()
+        fields = {}
+        payload = {}
+        if wants_json:
+            payload = self.read_json_payload()
+            if payload is None:
+                return
+            article_ids = payload.get("article_ids") or []
+        else:
+            fields = self.read_form_multi()
+            article_ids = fields.get("article_ids", [])
+
+        if isinstance(article_ids, (str, int)):
+            article_ids = [article_ids]
+
+        clean_ids = [int(raw_id) for raw_id in article_ids if str(raw_id).isdigit()]
+        if not clean_ids:
+            result = {
+                "success": False,
+                "message": "Chưa chọn bài viết nào.",
+                "results": [],
+            }
+            if wants_json:
+                self.respond_json(result, HTTPStatus.BAD_REQUEST)
+            else:
+                self.redirect(
+                    self.admin_return_url_from_fields(
+                        fields,
+                        default_status="approved",
+                        notice=result["message"],
+                    )
+                )
+            return
+
+        delay_seconds = payload.get("delay_seconds", 1.2) if wants_json else 1.2
+        result = publish_articles_to_facebook_bulk(clean_ids, delay_seconds=delay_seconds)
+        if wants_json:
+            self.respond_json(result)
+            return
+
+        self.redirect(
+            self.admin_return_url_from_fields(
+                fields,
+                default_status="approved",
+                notice=summarize_facebook_bulk_result(result),
             )
         )
 
@@ -2404,7 +3341,7 @@ class CMSHandler(BaseHTTPRequestHandler):
             return
 
         payload = output.getvalue()
-        filename = f"iec-news-{article_id}-{slugify(article['title'])}.png"
+        filename = f"pnews-{article_id}-{slugify(article['title'])}.png"
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "image/png")
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
@@ -2489,6 +3426,44 @@ class CMSHandler(BaseHTTPRequestHandler):
             return {key: [value] for key, value in fields.items()}
         return {}
 
+    def request_wants_json(self):
+        content_type = self.headers.get("Content-Type", "")
+        accept = self.headers.get("Accept", "")
+        return content_type.startswith("application/json") or "application/json" in accept
+
+    def read_json_payload(self):
+        try:
+            return json.loads(self.read_body().decode("utf-8", errors="replace") or "{}")
+        except json.JSONDecodeError:
+            self.respond_json(
+                {
+                    "success": False,
+                    "message": "Payload JSON khong hop le.",
+                    "error": "Invalid JSON body.",
+                },
+                HTTPStatus.BAD_REQUEST,
+            )
+            return None
+
+    def admin_return_url_from_fields(self, fields, default_status="approved", notice=""):
+        fields = fields or {}
+        return_status = (fields.get("return_status") or [default_status])[0]
+        return_q = (fields.get("return_q") or [""])[0].strip()
+        return_source = (fields.get("return_source") or [""])[0].strip()
+        return_topic = (fields.get("return_topic") or [""])[0].strip()
+        return_date_raw = (fields.get("return_date") or [today_iso_date()])[0].strip()
+        return_date = "" if return_date_raw == "all" else return_date_raw
+        return_page = (fields.get("return_page") or ["1"])[0].strip()
+        return admin_filter_url(
+            return_status or default_status,
+            return_q,
+            return_source,
+            return_topic,
+            date_filter=return_date,
+            notice=notice,
+            page=return_page,
+        )
+
     def is_authenticated(self):
         return self.get_session_id() in SESSIONS
 
@@ -2499,21 +3474,55 @@ class CMSHandler(BaseHTTPRequestHandler):
             return ""
         return cookie[SESSION_COOKIE].value
 
+    def clear_admin_session(self):
+        session_id = self.get_session_id()
+        if session_id in SESSIONS:
+            SESSIONS.remove(session_id)
+
+    def should_clear_admin_session(self):
+        path = urlparse(self.path).path
+        return path == "/client" or path.startswith("/client/article/")
+
+    def send_clear_session_cookie(self):
+        self.clear_admin_session()
+        self.send_header("Set-Cookie", f"{SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax")
+
     def require_admin(self, callback):
         if not self.is_authenticated():
             self.redirect("/admin")
             return
         callback()
 
+    def should_no_cache(self):
+        path = urlparse(self.path).path
+        return path.startswith("/admin") or path in {"/dashboard"} or self.should_clear_admin_session()
+
+    def send_no_cache_headers(self):
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+
     def redirect(self, location):
         self.send_response(HTTPStatus.SEE_OTHER)
         self.send_header("Location", location)
+        if str(location or "").startswith("/client"):
+            self.send_clear_session_cookie()
+        if (
+            self.should_no_cache()
+            or str(location or "").startswith("/admin")
+            or str(location or "").startswith("/client")
+        ):
+            self.send_no_cache_headers()
         self.end_headers()
 
     def respond_html(self, body, status=HTTPStatus.OK):
         payload = body.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        if self.should_clear_admin_session():
+            self.send_clear_session_cookie()
+        if self.should_no_cache():
+            self.send_no_cache_headers()
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -2522,6 +3531,8 @@ class CMSHandler(BaseHTTPRequestHandler):
         payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        if self.should_no_cache():
+            self.send_no_cache_headers()
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -2572,15 +3583,14 @@ def guess_content_type(path):
 def run(host="127.0.0.1", port=8000):
     init_db()
     server = ThreadingHTTPServer((host, port), CMSHandler)
-    print(f"IEC News CMS running at http://{host}:{port}")
-    # print(f"Admin mặc định: {ADMIN_USERNAME} / {ADMIN_PASSWORD}")
+    print(f"PNews CMS running at http://{host}:{port}")
     server.serve_forever()
 
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Run IEC News CMS web app.")
+    parser = argparse.ArgumentParser(description="Run PNews CMS web app.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=8000, type=int)
     args = parser.parse_args()

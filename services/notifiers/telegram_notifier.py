@@ -79,7 +79,7 @@ class TelegramNotifier:
         topic = article.get("content_topic") or category
         title = article.get("title") or "Không có tiêu đề"
         summary = article.get("summary") or "Chưa có tóm tắt."
-        source = article.get("source") or "IEC News"
+        source = article.get("source") or "PNews"
         url = article.get("url") or ""
         published_at = article.get("published_at") or article.get("crawled_at") or ""
 
@@ -93,7 +93,7 @@ class TelegramNotifier:
         published_line = f"🗓 Ngày đăng: {safe_published_at}\n" if safe_published_at else ""
 
         return (
-            f"📰 IEC News | {safe_category}\n\n"
+            f"📰 PNews | {safe_category}\n\n"
             f"<b>{safe_title}</b>\n\n"
             f"📝 Tóm tắt:\n"
             f"{safe_summary}\n\n"

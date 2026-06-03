@@ -15,7 +15,7 @@ def print_batch_result(result):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Send IEC News articles to Telegram.")
+    parser = argparse.ArgumentParser(description="Send PNews articles to Telegram.")
     parser.add_argument("--test", action="store_true", help="Send a short Telegram test message.")
     parser.add_argument("--article-id", type=int, help="Send one approved/published article.")
     parser.add_argument("--limit", type=int, help="Send latest approved/published articles.")
@@ -28,7 +28,7 @@ def main():
     try:
         if args.test:
             notifier = TelegramNotifier(default_chat_id=args.chat_id)
-            notifier.send_message("✅ Test IEC News Telegram Bot thành công.", chat_id=args.chat_id)
+            notifier.send_message("Test PNews Telegram Bot thanh cong.", chat_id=args.chat_id)
             print("Telegram test message sent.")
             return 0
 
@@ -46,4 +46,3 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

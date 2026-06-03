@@ -53,7 +53,7 @@ File nay ghi lai trang thai va cac viec da lam trong project. README dung cho hu
 - Đã chuẩn hóa `services/image_generator.py` để tạo news card 1080 x 1350 px bằng Pillow.
 - Hàm chính hiện tại là `generate_news_card(article, output_dir="data/generated_images")`.
 - Thumbnail hỗ trợ URL online và file local, resize theo cover + center crop để không méo ảnh.
-- Khi thumbnail rỗng/lỗi/timeout/ảnh hỏng, hệ thống fallback về ảnh `IEC News.png` và không làm crash pipeline.
+- Khi thumbnail rỗng/lỗi/timeout/ảnh hỏng, hệ thống fallback về ảnh `PNews.png` và không làm crash pipeline.
 - Title được giới hạn tối đa 3 dòng, summary tối đa 5 dòng, nguồn nằm góc dưới phải.
 - Đã thêm script `scripts/test_generate_news_cards.py` để tạo thử 3-5 ảnh từ CSV/JSON hiện có, không cần API key và không cần crawl mới.
 

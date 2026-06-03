@@ -1,4 +1,4 @@
-const showAdminLoadingOverlay = (titleText) => {
+﻿const showAdminLoadingOverlay = (titleText) => {
   const overlay = document.querySelector("[data-admin-loading]");
   if (!(overlay instanceof HTMLElement)) {
     return;
@@ -49,7 +49,7 @@ const openArticleTarget = (container) => {
 };
 
 const updateBulkExportState = () => {
-  document.querySelectorAll("[data-export-selected-png]").forEach((button) => {
+  document.querySelectorAll("[data-requires-selection]").forEach((button) => {
     if (!(button instanceof HTMLButtonElement)) {
       return;
     }
@@ -58,6 +58,16 @@ const updateBulkExportState = () => {
     button.disabled = selected === 0;
     button.setAttribute("aria-disabled", selected === 0 ? "true" : "false");
   });
+};
+
+const initializeBulkSelectionState = () => {
+  document.querySelectorAll("[data-row-check], [data-select-all]").forEach((checkbox) => {
+    if (checkbox instanceof HTMLInputElement) {
+      checkbox.checked = false;
+      checkbox.indeterminate = false;
+    }
+  });
+  updateBulkExportState();
 };
 
 document.addEventListener("click", (event) => {
@@ -116,12 +126,6 @@ document.addEventListener("submit", (event) => {
     return;
   }
 
-  const message = form.dataset.confirm;
-  if (message && !window.confirm(message)) {
-    event.preventDefault();
-    return;
-  }
-
   const submitter = event.submitter;
   if (submitter instanceof HTMLButtonElement && submitter.name === "bulk_action") {
     const selected = form.querySelectorAll("[data-row-check]:checked").length;
@@ -138,6 +142,16 @@ document.addEventListener("submit", (event) => {
         return;
       }
     }
+  }
+
+  const submitterMessage =
+    submitter instanceof HTMLElement && submitter.dataset.confirm
+      ? submitter.dataset.confirm
+      : "";
+  const message = submitterMessage || form.dataset.confirm;
+  if (message && !window.confirm(message)) {
+    event.preventDefault();
+    return;
   }
 
   if (form.matches(".bulk-review-form")) {
@@ -205,7 +219,8 @@ document.querySelectorAll("form[data-auto-submit]").forEach((form) => {
   });
 });
 
-updateBulkExportState();
+initializeBulkSelectionState();
+window.addEventListener("pageshow", initializeBulkSelectionState);
 
 const scrollTopButton = document.querySelector("[data-scroll-top]");
 if (scrollTopButton instanceof HTMLButtonElement) {
@@ -280,20 +295,20 @@ if (chatbot instanceof HTMLElement) {
     if (article.thumbnail) {
       const image = document.createElement("img");
       image.src = article.thumbnail;
-      image.alt = article.title || "IEC News";
+      image.alt = article.title || "PNews";
       image.loading = "lazy";
       image.addEventListener(
         "error",
         () => {
           image.remove();
-          imageWrap.textContent = "IEC";
+          imageWrap.textContent = "PNews";
           imageWrap.classList.add("is-fallback");
         },
         { once: true },
       );
       imageWrap.appendChild(image);
     } else {
-      imageWrap.textContent = "IEC";
+      imageWrap.textContent = "PNews";
       imageWrap.classList.add("is-fallback");
     }
 
@@ -323,7 +338,7 @@ if (chatbot instanceof HTMLElement) {
     }
     const item = document.createElement("article");
     item.className = "chat-message bot loading";
-    item.innerHTML = "<p>IEC News Assistant đang tìm bài phù hợp...</p>";
+    item.innerHTML = "<p>PNews Assistant đang tìm bài phù hợp...</p>";
     messages.appendChild(item);
     messages.scrollTop = messages.scrollHeight;
     return item;

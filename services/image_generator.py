@@ -56,14 +56,14 @@ SOURCE_FONT_SIZE = 32
 SOURCE_RIGHT_PADDING = 56
 SOURCE_BOTTOM_PADDING = 50
 
-LOGO_TEXT = "P-News"
+LOGO_TEXT = "PNews"
 LOGO_MARGIN_TOP = 24
 LOGO_MARGIN_RIGHT = 26
 LOGO_FONT_SIZE = 48
 LOGO_PADDING_X = 22
 LOGO_PADDING_Y = 12
 
-DEFAULT_PLACEHOLDER_IMAGE = "IEC News.png"
+DEFAULT_PLACEHOLDER_IMAGE = "PNews.png"
 THUMBNAIL_CACHE_DIR = DATA_DIR / "thumbnails"
 ARTICLE_IMAGE_CACHE_PATH = THUMBNAIL_CACHE_DIR / "article_images.json"
 DEFAULT_OUTPUT_DIR = DATA_DIR / "generated_images"
@@ -193,7 +193,7 @@ def generate_news_card_with_status(article: dict, output_dir: str = "data/genera
     return str(created), used_fallback, thumbnail_source
 
 
-def create_news_card(article, output_path, brand_name="P-News"):
+def create_news_card(article, output_path, brand_name="PNews"):
     """Create social news card using existing public interface."""
     output = _resolve_output_path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -209,11 +209,11 @@ def prepare_article_for_card(article):
 
     title = _clean_display_text(data.get("title"))
     if not title:
-        title = "Tin tức IEC"
+        title = "Tin tức PNews"
 
     source = _clean_display_text(data.get("source"))
     if not source:
-        source = "IEC News"
+        source = "PNews"
 
     category = _clean_display_text(data.get("category"))
     content_topic = _clean_display_text(data.get("content_topic"))
@@ -234,7 +234,7 @@ def prepare_article_for_card(article):
     return data
 
 
-def create_news_cards_from_json(json_path, output_dir, limit=None, brand_name="P-News"):
+def create_news_cards_from_json(json_path, output_dir, limit=None, brand_name="PNews"):
     """Create news cards from a JSON file containing article list."""
     output_root = _resolve_output_dir(output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
@@ -265,7 +265,7 @@ def create_news_cards_from_csv(
     csv_path,
     output_dir,
     limit=None,
-    brand_name="P-News",
+    brand_name="PNews",
     require_thumbnail=False,
 ):
     """Create news cards from exported CSV."""
@@ -399,7 +399,7 @@ def _draw_content(draw, article):
         article.get("category", ""),
         article.get("content_topic", ""),
     )
-    source_text = _clean_display_text(source_text) or "IEC News"
+    source_text = _clean_display_text(source_text) or "PNews"
     source_text = _truncate_with_ellipsis(
         draw,
         source_text,
@@ -435,7 +435,7 @@ def _draw_content(draw, article):
 
 
 def _build_source_label(source, category, content_topic):
-    source_text = _clean_display_text(source) or "IEC News"
+    source_text = _clean_display_text(source) or "PNews"
     category_text = _clean_display_text(category)
     topic_text = _clean_display_text(content_topic)
 
@@ -543,7 +543,7 @@ def _load_best_thumbnail(article):
             return image, False, candidate
 
     fallback = _load_fallback_image(article)
-    return fallback, True, "fallback:IEC News"
+    return fallback, True, "fallback:PNews"
 
 
 def _thumbnail_candidates(article):
@@ -681,12 +681,12 @@ def _load_fallback_image(article=None):
         except Exception as exc:
             safe_print(f"[WARN] Khong mo duoc fallback image '{fallback_path}': {exc}")
 
-    safe_print("[WARN] Khong tim thay anh fallback IEC News. Tao placeholder tam.")
+    safe_print("[WARN] Khong tim thay anh fallback PNews. Tao placeholder tam.")
     return _create_placeholder_thumbnail(article)
 
 
 def _create_placeholder_thumbnail(article=None):
-    source = _clean_display_text((article or {}).get("source") or "IEC News")
+    source = _clean_display_text((article or {}).get("source") or "PNews")
     category = _clean_display_text(
         (article or {}).get("category") or (article or {}).get("content_topic") or ""
     )
@@ -708,9 +708,9 @@ def _resolve_fallback_image_path():
 
     direct_candidates = [
         BASE_DIR / DEFAULT_PLACEHOLDER_IMAGE,
-        BASE_DIR / "IEC News.jpg",
-        BASE_DIR / "IEC News.jpeg",
-        BASE_DIR / "IEC News.webp",
+        BASE_DIR / "PNews.jpg",
+        BASE_DIR / "PNews.jpeg",
+        BASE_DIR / "PNews.webp",
         DATA_DIR / DEFAULT_PLACEHOLDER_IMAGE,
     ]
     for path in direct_candidates:
@@ -719,7 +719,7 @@ def _resolve_fallback_image_path():
             return path
 
     glob_candidates = []
-    for pattern in ("*IEC*News*.png", "*IEC*News*.jpg", "*IEC*News*.jpeg", "*IEC*News*.webp"):
+    for pattern in ("*PNews*.png", "*PNews*.jpg", "*PNews*.jpeg", "*PNews*.webp"):
         glob_candidates.extend(BASE_DIR.glob(pattern))
     glob_candidates = sorted([path for path in glob_candidates if path.is_file()])
 
@@ -989,7 +989,7 @@ def _build_output_filename(article, index=None):
         url_digest = hashlib.sha1(str(article.get("url", "")).encode("utf-8")).hexdigest()[:10]
         title_slug = f"article-{url_digest or int(time.time())}"
 
-    source_slug = _slugify_text(article.get("source", "")) or "iec-news"
+    source_slug = _slugify_text(article.get("source", "")) or "pnews"
     category_slug = _slugify_text(article.get("category") or article.get("content_topic") or "") or "news"
 
     if index is None:

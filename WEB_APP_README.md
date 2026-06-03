@@ -1,4 +1,4 @@
-# IEC News CMS Web App v2.1
+﻿# PNews CMS Web App v2.1
 
 Web app bo sung lop admin/client cho project crawler tin tuc.
 
@@ -15,18 +15,13 @@ Mo trinh duyet:
 - Admin dashboard: `http://127.0.0.1:8000/admin/dashboard`
 - Upload an pham: `http://127.0.0.1:8000/admin/upload`
 
-Tai khoan mac dinh:
-
-- User: `admin`
-- Password: `admin123`
-
-Nen doi bang bien moi truong khi chay that:
+Tai khoan admin duoc cau hinh qua bien moi truong hoac file `.env` local:
 
 ```powershell
-$env:IEC_ADMIN_USER="admin"
-$env:IEC_ADMIN_PASSWORD="mat-khau-moi"
-python web_app.py --host 127.0.0.1 --port 8000
+$env:PNEWS_ADMIN_ACCOUNTS='{"admin":"your_strong_password"}'
 ```
+
+Co the them nhieu tai khoan bang JSON object hoac dung dang ngan cach `user:password,user2:password2`. Khong dua mat khau that vao code, docs hoac GitHub.
 
 ## Luong su dung
 
@@ -35,11 +30,12 @@ python web_app.py --host 127.0.0.1 --port 8000
 3. Admin vao `/admin` de duyet, tu choi, xoa hoac khoi phuc bai viet.
 4. Client tai `/client` chi hien thi cac bai da duyet/dang.
 5. Admin co the upload an pham moi tai `/admin/upload`.
-6. Dashboard tai `/admin/dashboard` hien thi tong quan nguon bao, chu de, bai moi va canh bao chat luong.
+6. Dashboard tai `/admin/dashboard` hien thi tong quan nguon bao, chu de, bai moi, trang thai Facebook va canh bao chat luong; cac chi so khong co du lieu hien `0`.
 
 ## Dieu huong va trai nghiem admin
 
 - Moi trang admin hien thi 3 nut dieu huong nhanh toi cac trang con lai: tong quan, duyet bai, tai an pham va client.
+- Khi admin bam sang `/client`, session admin se bi xoa; quay lai `/admin` hoac `/admin/dashboard` phai dang nhap lai. Xem them `docs/ADMIN_CLIENT_AUTH_FLOW.md`.
 - Trang duyet bai cho phep chon nhieu bai va hien thong bao cho khi dang xu ly duyet/xoa/go khoi client.
 - Trang duyet bai mac dinh loc theo ngay hom nay, chan ngay tuong lai va co nut `Tat ca ngay` de xem toan bo.
 - Bai da duyet co nut `Export PNG`; nut export hang loat bi khoa cho den khi tick it nhat mot bai.
@@ -63,7 +59,7 @@ python web_app.py --host 127.0.0.1 --port 8000
 - Anh news card sinh tu dong: `data/generated_images/`
 - Static CSS/JS: `web_assets/`
 
-News card duoc tao boi `services/image_generator.py` qua ham `generate_news_card(article, output_dir="data/generated_images")`. Anh su dung canvas 1080 x 1350 px, thumbnail cover/crop o phan tren, logo `P-News`, tieu de toi da 3 dong, tom tat toi da 5 dong va nguon o goc duoi phai.
+News card duoc tao boi `services/image_generator.py` qua ham `generate_news_card(article, output_dir="data/generated_images")`. Anh su dung canvas 1080 x 1350 px, thumbnail cover/crop o phan tren, logo `PNews`, tieu de toi da 3 dong, tom tat toi da 5 dong va nguon o goc duoi phai.
 
 Neu bai thieu `image_path` hoac file anh da bi xoa, web app se thu tao lai news card khi render danh sach admin/client. Khong doi thu muc output neu web dang tro toi `data/generated_images/`.
 
@@ -106,7 +102,36 @@ POST /api/chat
 GET /api/chat/suggestions
 ```
 
-## IEC News Assistant
+## Facebook Page publish
+
+Can cau hinh bien moi truong truoc khi dang len Facebook Page:
+
+```powershell
+$env:FACEBOOK_PAGE_ID="your_page_id"
+$env:FACEBOOK_PAGE_ACCESS_TOKEN="your_page_access_token"
+$env:FACEBOOK_GRAPH_API_VERSION="v25.0"
+```
+
+Admin endpoints:
+
+```text
+POST /admin/articles/{article_id}/publish-facebook
+POST /admin/articles/publish-facebook-bulk
+```
+
+Hanh vi dang Facebook:
+
+- Dang 1 bai: upload anh an pham cua bai do len Facebook Page.
+- Dang nhieu bai: tao 1 bai Facebook duy nhat, dinh kem tat ca anh an pham da chon bang multi-photo post.
+- He thong khong ghep cac anh an pham thanh mot file anh duy nhat.
+
+Test ket noi Graph API:
+
+```powershell
+python scripts\test_facebook_publish.py
+```
+
+## PNews Assistant
 
 Trang `/client` co widget chat noi. Chatbot uu tien tra loi dua tren database/rule cho cac cau hoi ve tin moi, chu de, nguon bao va tu khoa. Voi cau hoi can tom tat hoac goi y tu nhien, app co the dung Gemini/Groq neu da cau hinh API key.
 

@@ -1,13 +1,13 @@
-# Vietnamese News Crawler v2.1
+﻿# Vietnamese News Crawler v2.1
 
-Du an crawl tin tuc phu hop voi dinh huong IEC/PTIT, chuan hoa du lieu, tao anh news card va phuc vu dashboard web admin/client.
+Du an crawl tin tuc phu hop voi dinh huong PNews/PTIT, chuan hoa du lieu, tao anh news card va phuc vu dashboard web admin/client.
 
 ## Tinh nang chinh
 
 - Crawl tin theo nguon v2.0: VNExpress, Bao Chinh phu va PTIT.
 - Chuan hoa du lieu bai viet theo format cu de khong pha web admin/client.
 - Luu raw JSON, CSV exports, master articles chong trung, daily snapshot va processed theo source/topic/category.
-- Tao anh news card bang Pillow voi logo `P-News`, fallback ve anh `IEC News.png` neu bai viet thieu thumbnail.
+- Tao anh news card bang Pillow voi logo `PNews`, fallback ve anh `PNews.png` neu bai viet thieu thumbnail.
 - Ho tro enrich summary bang Gemini/Groq/fallback neu summary crawler con thieu.
 - Ho tro dashboard web admin/client va Telegram notification nhu phien ban cu.
 - Web admin co 3 trang chinh: tong quan, duyet bai va tai an pham; moi trang co nut dieu huong nhanh toi cac trang con lai.
@@ -17,7 +17,7 @@ Du an crawl tin tuc phu hop voi dinh huong IEC/PTIT, chuan hoa du lieu, tao anh 
 
 ## Diem moi v2.1
 
-- Doi nhan dien news card tu `IEC News` sang `P-News` va regenerate lai toan bo an pham hien co.
+- Doi nhan dien news card ve `PNews` va regenerate lai toan bo an pham hien co.
 - Them loc theo ngay cho admin va client; URL ngay tuong lai se tu dong clamp ve ngay hien tai.
 - Bo nut tim thu cong trong cac filter auto-submit de giao dien gon hon.
 - Them export PNG cho bai da duyet va khoa nut export bulk khi chua chon bai.
@@ -147,8 +147,8 @@ Thu muc `data/`, `logs/`, virtualenv va file secret local duoc bo qua khi commit
 - Ham chinh tao an pham: `generate_news_card(article, output_dir="data/generated_images")`.
 - Tao anh 1080 x 1350 px ti le 4:5 bang Pillow.
 - Thumbnail nam tren cung, resize cover + center crop de khong meo anh.
-- Neu thumbnail rong, loi URL, timeout hoac anh hong thi fallback ve anh `IEC News.png`.
-- Logo goc tren phai mac dinh la `P-News`.
+- Neu thumbnail rong, loi URL, timeout hoac anh hong thi fallback ve anh `PNews.png`.
+- Logo goc tren phai mac dinh la `PNews`.
 - Text tieng Viet dung font ho tro Unicode neu co; title gioi han 3 dong, summary gioi han 5 dong.
 - Output mac dinh nam trong `data/generated_images/` de web admin/client va Telegram doc cung mot vi tri.
 
@@ -221,6 +221,16 @@ Copy-Item config\api_keys.example.json config\api_keys.json
 
 Sau do dien key that vao `config/api_keys.json`. File nay da duoc ignore de khong day len GitHub.
 
+## Cau hinh tai khoan admin
+
+Admin login bat buoc lay tu bien moi truong hoac file `.env` local, khong hardcode trong source code:
+
+```powershell
+$env:PNEWS_ADMIN_ACCOUNTS='{"admin":"your_strong_password"}'
+```
+
+Co the cau hinh nhieu tai khoan bang JSON object. File `.env` da duoc ignore, chi commit `.env.example` voi gia tri mau.
+
 ## Chay crawler
 
 ```powershell
@@ -240,7 +250,7 @@ Du lieu dau ra se nam trong `data/`.
 Windows Task Scheduler dang dung task `Detai1 News Crawler` de chay:
 
 ```text
-C:\Users\Xuanuio\Desktop\IEC\DeTai1\Code\run_crawler.bat
+<project>\run_crawler.bat
 ```
 
 Lich chay: hang ngay luc 07:00. Batch nay thuc hien theo thu tu:

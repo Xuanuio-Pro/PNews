@@ -18,12 +18,13 @@ Dam bao khong commit cac file sau:
 
 - `config/api_keys.json`
 - `.env`
+- Tai khoan admin, token Facebook, API key Gemini/Groq/Telegram that
 - `detai1/`, `.venv/`, `venv/`
 - `logs/`
 - `data/` sinh ra khi crawl, database, cache anh
 - `__pycache__/`, `*.pyc`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`
 
-File cau hinh mau an toan nam tai `config/api_keys.example.json`.
+File cau hinh mau an toan nam tai `.env.example` va `config/api_keys.example.json`.
 
 ## Don dep truoc khi commit
 

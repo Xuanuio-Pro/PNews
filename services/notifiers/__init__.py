@@ -1,2 +1,2 @@
-"""Notification backends for IEC News."""
+"""Notification backends for PNews."""
 

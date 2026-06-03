@@ -66,16 +66,36 @@ h3 {
   min-width: 0;
 }
 
-.brand-mark {
-  display: grid;
-  place-items: center;
-  width: 42px;
-  height: 42px;
-  flex: 0 0 42px;
-  border-radius: 8px;
-  background: var(--blue);
-  color: #fff;
-  font-weight: 900;
+.brand-logo-link {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.site-logo {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+}
+
+.client-logo {
+  width: auto;
+  height: 46px;
+  max-width: min(140px, 36vw);
+}
+
+.admin-logo {
+  width: auto;
+  height: 60px;
+  max-width: 120px;
+}
+
+.login-logo {
+  width: auto;
+  height: 112px;
+  max-width: min(180px, 56vw);
+  margin-bottom: 18px;
 }
 
 .brand strong,
@@ -831,7 +851,8 @@ code {
 }
 
 .admin-brand {
-  padding: 4px;
+  justify-content: center;
+  padding: 2px 0 8px;
 }
 
 .admin-nav {
@@ -1121,6 +1142,95 @@ code {
   gap: 8px;
 }
 
+.facebook-badge {
+  background: #edf4ff;
+  color: #1d4f91;
+}
+
+.facebook-success {
+  background: #eaf8ef;
+  color: var(--green);
+}
+
+.facebook-posting {
+  background: #fff7e7;
+  color: #9a6500;
+}
+
+.facebook-failed {
+  background: #fff0f0;
+  color: var(--red);
+}
+
+.facebook-preview {
+  margin: 12px 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f8fbfd;
+}
+
+.facebook-preview summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  color: var(--ink);
+  font-weight: 850;
+}
+
+.facebook-preview-body {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 12px;
+  padding: 0 12px 12px;
+}
+
+.facebook-preview-image {
+  overflow: hidden;
+  aspect-ratio: 4 / 5;
+  border-radius: 7px;
+  background: #e7eef3;
+}
+
+.facebook-preview-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.facebook-preview-fallback {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: var(--blue);
+  font-weight: 900;
+}
+
+.facebook-preview-copy {
+  min-width: 0;
+}
+
+.facebook-preview-copy pre {
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.facebook-preview-meta {
+  display: grid;
+  gap: 4px;
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 13px;
+  word-break: break-word;
+}
+
 .panel-form,
 .upload-form {
   display: grid;
@@ -1166,11 +1276,35 @@ code {
 }
 
 /* Admin dashboard */
+.dashboard-card-sections {
+  display: grid;
+  gap: 18px;
+  margin-bottom: 16px;
+}
+
+.dashboard-card-section {
+  display: grid;
+  gap: 10px;
+}
+
+.dashboard-card-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+}
+
+.dashboard-card-section-heading h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 900;
+}
+
 .dashboard-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
-  margin-bottom: 16px;
 }
 
 .dashboard-card {
@@ -1212,22 +1346,32 @@ code {
 
 .dashboard-card.tone-blue {
   border-top: 4px solid var(--blue);
+  background: linear-gradient(180deg, rgba(10, 96, 130, 0.06), var(--paper) 58%);
 }
 
 .dashboard-card.tone-green {
   border-top: 4px solid var(--green);
+  background: linear-gradient(180deg, rgba(32, 121, 83, 0.07), var(--paper) 58%);
+}
+
+.dashboard-card.tone-facebook {
+  border-top: 4px solid #1877f2;
+  background: linear-gradient(180deg, rgba(24, 119, 242, 0.08), var(--paper) 58%);
 }
 
 .dashboard-card.tone-amber {
   border-top: 4px solid var(--amber);
+  background: linear-gradient(180deg, rgba(164, 102, 14, 0.08), var(--paper) 58%);
 }
 
 .dashboard-card.tone-red {
   border-top: 4px solid var(--red);
+  background: linear-gradient(180deg, rgba(190, 50, 58, 0.07), var(--paper) 58%);
 }
 
 .dashboard-card.tone-muted {
   border-top: 4px solid #8090a0;
+  background: linear-gradient(180deg, rgba(128, 144, 160, 0.08), var(--paper) 58%);
 }
 
 .dashboard-panels {
@@ -1565,5 +1709,13 @@ code {
 
   .review-actions {
     grid-template-columns: 1fr;
+  }
+
+  .facebook-preview-body {
+    grid-template-columns: 1fr;
+  }
+
+  .facebook-preview-image {
+    max-width: 180px;
   }
 }

@@ -45,9 +45,9 @@ def load_articles():
     safe_print("[DATA] Khong tim thay CSV/JSON hop le. Dung du lieu demo.")
     return [
         {
-            "source": "IEC News",
+            "source": "PNews",
             "title": "Sinh vien PTIT dat giai cao trong cuoc thi AI toan quoc",
-            "url": "https://example.com/iec-demo-1",
+            "url": "https://example.com/pnews-demo-1",
             "crawled_at": "2026-05-27 09:00:00",
             "published_at": "2026-05-27 08:30:00",
             "thumbnail": "",
@@ -69,8 +69,8 @@ def ensure_minimum_articles(articles, min_count=MIN_CARDS):
     while len(articles) < min_count:
         idx = len(articles) + 1
         clone = dict(seed)
-        clone["title"] = f"{seed.get('title', 'Tin tuc IEC')} (demo {idx})"
-        clone["url"] = f"{seed.get('url', 'https://example.com/iec-demo')}-{idx}"
+        clone["title"] = f"{seed.get('title', 'Tin tuc PNews')} (demo {idx})"
+        clone["url"] = f"{seed.get('url', 'https://example.com/pnews-demo')}-{idx}"
         clone["thumbnail"] = ""
         if not clone.get("summary"):
             clone["summary"] = "Nội dung đang được cập nhật."
@@ -91,7 +91,7 @@ def main():
             output_dir=OUTPUT_DIR,
         )
         mode = "FALLBACK" if used_fallback else "THUMBNAIL_THAT"
-        title = str(article.get("title", "")).strip() or "Tin tuc IEC"
+        title = str(article.get("title", "")).strip() or "Tin tuc PNews"
         safe_print(f"[{index}] {mode}: {title}")
         safe_print(f"     -> source: {thumbnail_source}")
         safe_print(f"     -> output: {output_path}")

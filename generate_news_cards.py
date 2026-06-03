@@ -17,7 +17,7 @@ def safe_print(message):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Generate P-News cards from exported crawler CSV data."
+        description="Generate PNews cards from exported crawler CSV data."
     )
     parser.add_argument(
         "--input",
@@ -37,7 +37,7 @@ def parse_args():
     )
     parser.add_argument(
         "--brand",
-        default="P-News",
+        default="PNews",
         help="Brand text displayed at the top-right corner.",
     )
     parser.add_argument(
