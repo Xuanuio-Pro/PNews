@@ -14,6 +14,13 @@ Hệ thống PNews sử dụng các biến môi trường để nạp cấu hìn
 | `PNEWS_DATA_DIR` | String/Path | `data` | Thư mục lưu trữ database, ảnh news cards và upload. | Không |
 | `PNEWS_LOG_DIR` | String/Path | `logs` | Thư mục ghi logs hệ thống. | Không |
 | `PNEWS_DATABASE_PATH`| String/Path | `data/cms.sqlite3` | Đường dẫn lưu file Database SQLite. | Không |
+| `PNEWS_DOMAIN` | String | Rỗng | Domain public dùng cho Nginx/HTTPS, ví dụ `news.example.com`. | Chỉ khi dùng script Cloudflare |
+| `PNEWS_WWW_DOMAIN` | String | Rỗng | Domain phụ tùy chọn, ví dụ `www.news.example.com`. | Không |
+| `PNEWS_CERTBOT_EMAIL` | String | Rỗng | Email đăng ký Let's Encrypt/Certbot. | Chỉ khi dùng script Cloudflare |
+| `CLOULDFARE_TOKEN` | String | Rỗng | Cloudflare API token dùng cho DNS challenge. Giữ đúng tên biến này theo yêu cầu triển khai. | Chỉ khi dùng script Cloudflare |
+| `CLOUDFLARE_API_TOKEN` | String | Rỗng | Alias viết đúng chính tả; script dùng nếu `CLOULDFARE_TOKEN` trống. | Không |
+| `CLOUDFLARE_DNS_PROPAGATION_SECONDS` | Integer | `60` | Thời gian chờ DNS propagation trước khi Certbot xác minh. | Không |
+| `PNEWS_DISABLE_DEFAULT_NGINX_SITE` | Boolean | `1` | Xóa symlink site mặc định của Nginx khi setup site PNews. | Không |
 
 ---
 
@@ -63,6 +70,15 @@ PNEWS_PORT=8000
 PNEWS_DATA_DIR=data
 PNEWS_LOG_DIR=logs
 PNEWS_DATABASE_PATH=data/cms.sqlite3
+
+# Domain + HTTPS qua Nginx/Cloudflare
+PNEWS_DOMAIN=your-domain.com
+PNEWS_WWW_DOMAIN=www.your-domain.com
+PNEWS_CERTBOT_EMAIL=admin@your-domain.com
+CLOULDFARE_TOKEN=your_cloudflare_dns_api_token
+CLOUDFLARE_API_TOKEN=
+CLOUDFLARE_DNS_PROPAGATION_SECONDS=60
+PNEWS_DISABLE_DEFAULT_NGINX_SITE=1
 
 # Tài khoản Admin đăng nhập CMS
 PNEWS_ADMIN_ACCOUNTS={"admin":"replace_with_a_strong_password"}

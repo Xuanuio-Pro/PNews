@@ -61,6 +61,58 @@ curl -I http://news.example.com/admin
 
 ## 4. Cấu hình HTTPS bằng Certbot
 
+### Cách tự động bằng Cloudflare token
+
+Nếu DNS của domain đang dùng Cloudflare, cách khuyến nghị là dùng script có sẵn:
+
+```bash
+cd /opt/pnews
+nano .env
+```
+
+Điền các biến sau:
+
+```ini
+PNEWS_DOMAIN=news.example.com
+PNEWS_WWW_DOMAIN=www.news.example.com
+PNEWS_CERTBOT_EMAIL=admin@example.com
+CLOULDFARE_TOKEN=your_cloudflare_dns_api_token
+```
+
+Token Cloudflare cần quyền tối thiểu:
+
+- `Zone:Read`
+- `DNS:Edit`
+- Giới hạn trong đúng zone/domain của PNews.
+
+Trong Cloudflare Dashboard, nên đặt SSL/TLS mode là `Full (strict)` sau khi script cấp chứng chỉ thành công.
+
+Sau đó chạy:
+
+```bash
+chmod +x scripts/setup_nginx_cloudflare.sh
+./scripts/setup_nginx_cloudflare.sh
+```
+
+Script sẽ tự:
+
+- Cài `nginx`, `certbot`, `python3-certbot-dns-cloudflare`.
+- Build/chạy `pnews-web`.
+- Tạo credentials riêng tại `/etc/letsencrypt/cloudflare-pnews.ini` với quyền `600`.
+- Lấy SSL certificate bằng DNS challenge Cloudflare.
+- Render file Nginx HTTPS từ `deploy/nginx/pnews-cloudflare-ssl.conf.template`.
+- Reload Nginx.
+
+Kiểm tra:
+
+```bash
+curl -I https://news.example.com/health
+curl -I https://news.example.com/client
+curl -I https://news.example.com/admin
+```
+
+### Cách thủ công bằng plugin Nginx
+
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
 sudo certbot --nginx -d news.example.com -d www.news.example.com

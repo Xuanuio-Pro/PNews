@@ -107,6 +107,22 @@ sudo systemctl reload nginx
 
 Trong file Nginx, thay `pnews.example.com` bằng domain thật. Xem hướng dẫn chi tiết tại `docs/NGINX.md`.
 
+Nếu domain dùng Cloudflare, có thể cấu hình tự động HTTPS bằng token trong `.env`:
+
+```ini
+PNEWS_DOMAIN=news.example.com
+PNEWS_WWW_DOMAIN=www.news.example.com
+PNEWS_CERTBOT_EMAIL=admin@example.com
+CLOULDFARE_TOKEN=your_cloudflare_dns_api_token
+```
+
+Sau đó chạy:
+
+```bash
+chmod +x /opt/pnews/scripts/setup_nginx_cloudflare.sh
+/opt/pnews/scripts/setup_nginx_cloudflare.sh
+```
+
 ---
 
 ## 7. Kiểm tra chạy thử Crawler thủ công
