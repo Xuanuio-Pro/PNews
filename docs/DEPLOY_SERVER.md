@@ -92,7 +92,24 @@ curl http://localhost:8000/health
 
 ---
 
-## 6. Kiểm tra chạy thử Crawler thủ công
+## 6. Cấu hình Nginx reverse proxy
+Sau khi `pnews-web` chạy ổn định trên cổng `8000`, có thể dùng Nginx để đưa website ra domain public:
+
+```bash
+sudo apt update
+sudo apt install -y nginx
+sudo cp /opt/pnews/deploy/nginx/pnews.conf.example /etc/nginx/sites-available/pnews
+sudo nano /etc/nginx/sites-available/pnews
+sudo ln -s /etc/nginx/sites-available/pnews /etc/nginx/sites-enabled/pnews
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Trong file Nginx, thay `pnews.example.com` bằng domain thật. Xem hướng dẫn chi tiết tại `docs/NGINX.md`.
+
+---
+
+## 7. Kiểm tra chạy thử Crawler thủ công
 Để đảm bảo môi trường container chạy tốt, hãy kiểm tra crawler:
 
 ```bash
@@ -103,7 +120,7 @@ Nếu crawler chạy xong và lưu dữ liệu thành công mà không báo lỗ
 
 ---
 
-## 7. Cấu hình Múi giờ hệ thống và Lập lịch Cron chạy tự động lúc 7:00 Sáng
+## 8. Cấu hình Múi giờ hệ thống và Lập lịch Cron chạy tự động lúc 7:00 Sáng
 Để đảm bảo logs ghi nhận đúng thời gian Việt Nam và crawler kích hoạt đúng 7h sáng giờ Hà Nội:
 
 ```bash
@@ -128,7 +145,7 @@ Thêm dòng sau vào cuối file để hệ thống tự động chạy crawler 
 
 ---
 
-## 8. Quy trình Cập nhật Phiên bản mới (Update Code)
+## 9. Quy trình Cập nhật Phiên bản mới (Update Code)
 Khi có sự thay đổi về mã nguồn trên GitHub, tiến hành update như sau:
 
 ```bash
@@ -143,7 +160,7 @@ docker compose up -d --build pnews-web
 
 ---
 
-## 9. Rollback cơ bản khi gặp sự cố cập nhật
+## 10. Rollback cơ bản khi gặp sự cố cập nhật
 Nếu phiên bản mới bị lỗi hoặc không khởi động được, có thể khôi phục nhanh về bản ổn định trước đó:
 
 ```bash

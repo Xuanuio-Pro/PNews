@@ -1,0 +1,40 @@
+# PNews Nginx reverse proxy.
+# Copy this file to /etc/nginx/sites-available/pnews and replace pnews.example.com.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name pnews.example.com www.pnews.example.com;
+
+    client_max_body_size 20m;
+
+    access_log /var/log/nginx/pnews_access.log;
+    error_log /var/log/nginx/pnews_error.log;
+
+    location = /health {
+        access_log off;
+        proxy_pass http://127.0.0.1:8000/health;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_redirect off;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
+    }
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+}
