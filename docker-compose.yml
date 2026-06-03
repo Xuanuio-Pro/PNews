@@ -32,3 +32,29 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
     command: ["python", "-X", "utf8", "main.py"]
+
+  pnews-nginx:
+    image: nginx:alpine
+    container_name: pnews_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/nginx/pnews-docker.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - pnews-web
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  pnews-cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: pnews_cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-${CLOULDFARE_TUNNEL_TOKEN:-}}
+    depends_on:
+      - pnews-nginx
