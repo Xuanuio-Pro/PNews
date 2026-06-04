@@ -7,6 +7,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      TZ: Asia/Ho_Chi_Minh
     ports:
       - "8000:8000"
     volumes:
@@ -28,6 +30,8 @@ services:
     restart: "no"
     env_file:
       - .env
+    environment:
+      TZ: Asia/Ho_Chi_Minh
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
