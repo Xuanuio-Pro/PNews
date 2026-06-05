@@ -19,10 +19,10 @@ setup_logging("crawler_scheduler.log")
 LOGGER = logging.getLogger("pnews.scheduler")
 
 LOCK_DIR = DATA_DIR / "crawler_pipeline.lock"
-STALE_LOCK_SECONDS = int(os.getenv("PNEWS_CRAWLER_LOCK_STALE_SECONDS", "21600"))
+STALE_LOCK_SECONDS = int(os.getenv("PNEWS_CRAWLER_LOCK_STALE_SECONDS", "1800"))
 SCHEDULE_TIME = os.getenv("PNEWS_CRAWLER_SCHEDULE_TIME", "07:00")
-RETRY_SECONDS = int(os.getenv("PNEWS_CRAWLER_RETRY_SECONDS", "1800"))
-MAX_RETRIES = int(os.getenv("PNEWS_CRAWLER_MAX_RETRIES", "3"))
+RETRY_SECONDS = int(os.getenv("PNEWS_CRAWLER_RETRY_SECONDS", "300"))
+MAX_RETRIES = int(os.getenv("PNEWS_CRAWLER_MAX_RETRIES", "288"))
 RUN_ON_START = os.getenv("PNEWS_CRAWLER_RUN_ON_START", "true").lower() not in {
     "0",
     "false",
@@ -65,8 +65,13 @@ def acquire_lock():
     try:
         LOCK_DIR.mkdir()
     except FileExistsError:
-        LOGGER.warning("Crawler pipeline is already running. Skip this run.")
-        return None
+        age = time.time() - LOCK_DIR.stat().st_mtime
+        LOGGER.warning(
+            "Crawler pipeline lock exists at %s age_seconds=%s. Waiting for retry.",
+            LOCK_DIR,
+            int(age),
+        )
+        return False
 
     marker = LOCK_DIR / "owner.txt"
     marker.write_text(
@@ -88,8 +93,6 @@ def run_command(label, args):
 
 def run_pipeline():
     locked = acquire_lock()
-    if locked is None:
-        return True
     if not locked:
         return False
 

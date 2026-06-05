@@ -9,7 +9,7 @@ mkdir -p logs data
 LOCKDIR="data/crawler_pipeline.lock"
 CRON_LOG="logs/cron_crawler.log"
 CARD_LIMIT="${CARD_LIMIT:-20}"
-STALE_LOCK_SECONDS="${PNEWS_CRAWLER_LOCK_STALE_SECONDS:-21600}"
+STALE_LOCK_SECONDS="${PNEWS_CRAWLER_LOCK_STALE_SECONDS:-1800}"
 export TZ="${TZ:-Asia/Ho_Chi_Minh}"
 
 log() {
