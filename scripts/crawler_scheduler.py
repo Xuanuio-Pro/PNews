@@ -64,6 +64,7 @@ def acquire_lock():
 
     try:
         LOCK_DIR.mkdir()
+        LOCK_DIR.chmod(0o777)
     except FileExistsError:
         age = time.time() - LOCK_DIR.stat().st_mtime
         LOGGER.warning(
@@ -78,6 +79,7 @@ def acquire_lock():
         f"pid={os.getpid()}\nstarted_at={datetime.now().isoformat(timespec='seconds')}\n",
         encoding="utf-8",
     )
+    marker.chmod(0o666)
     return True
 
 

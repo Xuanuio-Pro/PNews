@@ -43,7 +43,9 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
     log "[WARN] Another crawler process is running. Exiting."
     exit 0
 fi
+chmod 777 "$LOCKDIR" 2>/dev/null || true
 printf 'pid=%s\nstarted_at=%s\n' "$$" "$(date '+%Y-%m-%d %H:%M:%S')" > "$LOCKDIR/owner.txt"
+chmod 666 "$LOCKDIR/owner.txt" 2>/dev/null || true
 
 trap 'rm -rf "$LOCKDIR"' EXIT
 
