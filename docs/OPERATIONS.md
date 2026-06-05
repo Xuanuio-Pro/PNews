@@ -45,10 +45,10 @@ tail -n 100 -f logs/app.log
 Khi cần thu thập dữ liệu lập tức ngoài khung giờ 7h sáng:
 ```bash
 # Thực thi pipeline thu thập tin tức
-docker compose run --rm pnews-crawler python -X utf8 main.py
+docker compose --profile manual run --rm pnews-crawler python -X utf8 main.py
 
 # Đồng bộ hóa dữ liệu vừa thu thập vào SQLite DB của Web app
-docker compose run --rm pnews-crawler python scripts/sync_cms_from_csv.py
+docker compose --profile manual run --rm pnews-crawler python scripts/sync_cms_from_csv.py
 ```
 Hoặc chạy thông qua shell script vận hành (có cơ chế chống chạy trùng lặp):
 ```bash

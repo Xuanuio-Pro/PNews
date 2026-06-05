@@ -40,7 +40,7 @@ docker compose exec -T pnews-web python -c "import urllib.request; urllib.reques
 echo "   -> [OK] /client và /admin phản hồi."
 
 echo "[6/8] Chạy thử dịch vụ pnews-crawler..."
-docker compose run --rm pnews-crawler python -X utf8 main.py
+docker compose --profile manual run --rm pnews-crawler python -X utf8 main.py
 
 echo "[7/8] Xác minh cơ sở dữ liệu SQLite..."
 if [ -f "data/cms.sqlite3" ]; then

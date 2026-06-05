@@ -143,7 +143,7 @@ Xem hướng dẫn chi tiết tại `docs/CLOUDFLARE_TUNNEL.md`.
 Để đảm bảo môi trường container chạy tốt, hãy kiểm tra crawler:
 
 ```bash
-docker compose run --rm pnews-crawler
+docker compose --profile manual run --rm pnews-crawler
 ```
 
 Nếu crawler chạy xong và lưu dữ liệu thành công mà không báo lỗi, môi trường đã sẵn sàng hoạt động.

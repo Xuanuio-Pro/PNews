@@ -27,6 +27,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: pnews_crawler
+    profiles:
+      - manual
     restart: "no"
     env_file:
       - .env
@@ -36,6 +38,26 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
     command: ["python", "-X", "utf8", "main.py"]
+
+  pnews-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pnews_scheduler
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      PNEWS_CRAWLER_SCHEDULE_TIME: ${PNEWS_CRAWLER_SCHEDULE_TIME:-07:00}
+      PNEWS_CRAWLER_RUN_ON_START: ${PNEWS_CRAWLER_RUN_ON_START:-true}
+      PNEWS_CRAWLER_RETRY_SECONDS: ${PNEWS_CRAWLER_RETRY_SECONDS:-1800}
+      PNEWS_CRAWLER_MAX_RETRIES: ${PNEWS_CRAWLER_MAX_RETRIES:-3}
+      CARD_LIMIT: ${CARD_LIMIT:-20}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    command: ["python", "-X", "utf8", "scripts/crawler_scheduler.py"]
 
   pnews-nginx:
     image: nginx:alpine

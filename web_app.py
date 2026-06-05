@@ -338,17 +338,45 @@ def seed_articles_from_csv():
                         """
                         UPDATE articles
                         SET
+                            source = CASE
+                                WHEN :source != '' THEN :source
+                                ELSE source
+                            END,
+                            title = CASE
+                                WHEN :title != '' THEN :title
+                                ELSE title
+                            END,
                             published_at = CASE
-                                WHEN published_at IS NULL OR TRIM(published_at) = '' THEN :published_at
+                                WHEN :published_at != '' THEN :published_at
                                 ELSE published_at
                             END,
                             crawled_at = CASE
-                                WHEN crawled_at IS NULL OR TRIM(crawled_at) = '' THEN :crawled_at
+                                WHEN :crawled_at != '' THEN :crawled_at
                                 ELSE crawled_at
+                            END,
+                            thumbnail = CASE
+                                WHEN :thumbnail != '' THEN :thumbnail
+                                ELSE thumbnail
+                            END,
+                            summary = CASE
+                                WHEN (summary IS NULL OR TRIM(summary) = '') AND :summary != '' THEN :summary
+                                ELSE summary
                             END,
                             summary_source = CASE
                                 WHEN summary_source IS NULL OR TRIM(summary_source) = '' THEN :summary_source
                                 ELSE summary_source
+                            END,
+                            newspaper_type = CASE
+                                WHEN :newspaper_type != '' THEN :newspaper_type
+                                ELSE newspaper_type
+                            END,
+                            content_topic = CASE
+                                WHEN :content_topic != '' THEN :content_topic
+                                ELSE content_topic
+                            END,
+                            category = CASE
+                                WHEN :category != '' THEN :category
+                                ELSE category
                             END,
                             image_path = CASE
                                 WHEN image_path IS NULL OR TRIM(image_path) = '' THEN :image_path
@@ -357,7 +385,8 @@ def seed_articles_from_csv():
                             generated_poster_image = CASE
                                 WHEN generated_poster_image IS NULL OR TRIM(generated_poster_image) = '' THEN :generated_poster_image
                                 ELSE generated_poster_image
-                            END
+                            END,
+                            updated_at = :updated_at
                         WHERE id = :id
                         """,
                         {**values, "id": existing_urls[url]},
@@ -691,6 +720,8 @@ def admin_date_filter_from_query(query):
 def article_date_sql_expr(status=None):
     if status == "approved":
         return "COALESCE(NULLIF(approved_at, ''), NULLIF(reviewed_at, ''), NULLIF(updated_at, ''), NULLIF(published_at, ''), NULLIF(crawled_at, ''), created_at)"
+    if status == "pending":
+        return "COALESCE(NULLIF(crawled_at, ''), NULLIF(updated_at, ''), NULLIF(published_at, ''), created_at)"
     if status == "rejected":
         return "COALESCE(NULLIF(reviewed_at, ''), NULLIF(updated_at, ''), NULLIF(published_at, ''), NULLIF(crawled_at, ''), created_at)"
     if status == "deleted":
@@ -1992,7 +2023,6 @@ def render_client_page(title, body, extra_class=""):
     <a class="brand brand-logo-link" href="/client" aria-label="PNews">
       <img class="site-logo client-logo" src="{SITE_LOGO_URL}" alt="PNews">
     </a>
-    <a class="button ghost compact" href="/admin">Khu vực quản trị</a>
   </header>
   <main class="client-shell">
     {body}
@@ -2200,8 +2230,7 @@ def render_client_home(query):
         cards = """
         <section class="empty-state">
           <h2>Chưa có bài đã duyệt</h2>
-          <p>Vào trang admin để duyệt bài. Sau khi duyệt, bài sẽ xuất hiện tại khu vực client.</p>
-          <a class="button primary" href="/admin">Mở admin</a>
+          <p>Các bài đã duyệt sẽ xuất hiện tại khu vực này.</p>
         </section>
         """
 

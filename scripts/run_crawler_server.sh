@@ -4,11 +4,12 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
 
-mkdir -p logs
+mkdir -p logs data
 
-LOCKFILE="/tmp/pnews_crawler.lock"
+LOCKDIR="data/crawler_pipeline.lock"
 CRON_LOG="logs/cron_crawler.log"
 CARD_LIMIT="${CARD_LIMIT:-20}"
+STALE_LOCK_SECONDS="${PNEWS_CRAWLER_LOCK_STALE_SECONDS:-21600}"
 export TZ="${TZ:-Asia/Ho_Chi_Minh}"
 
 log() {
@@ -30,24 +31,32 @@ run_step() {
 
 log "=== Starting Cron Crawler ==="
 
-exec 200>"$LOCKFILE"
-if ! flock -n 200; then
+if [ -d "$LOCKDIR" ]; then
+    lock_age=$(( $(date +%s) - $(stat -c %Y "$LOCKDIR" 2>/dev/null || echo 0) ))
+    if [ "$lock_age" -gt "$STALE_LOCK_SECONDS" ]; then
+        log "[WARN] Removing stale crawler lock at $LOCKDIR."
+        rm -rf "$LOCKDIR"
+    fi
+fi
+
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
     log "[WARN] Another crawler process is running. Exiting."
     exit 0
 fi
+printf 'pid=%s\nstarted_at=%s\n' "$$" "$(date '+%Y-%m-%d %H:%M:%S')" > "$LOCKDIR/owner.txt"
 
-trap 'rm -f "$LOCKFILE"' EXIT
+trap 'rm -rf "$LOCKDIR"' EXIT
 
 run_step "main.py" \
-    docker compose run --rm pnews-crawler python -X utf8 main.py
+    docker compose --profile manual run --rm pnews-crawler python -X utf8 main.py
 
 run_step "enrich_articles.py" \
-    docker compose run --rm pnews-crawler python -X utf8 enrich_articles.py --input data/exports/new_articles.csv
+    docker compose --profile manual run --rm pnews-crawler python -X utf8 enrich_articles.py --input data/exports/new_articles.csv
 
 run_step "generate_news_cards.py" \
-    docker compose run --rm pnews-crawler python -X utf8 generate_news_cards.py --input data/exports/new_articles.csv --limit "$CARD_LIMIT" --clean
+    docker compose --profile manual run --rm pnews-crawler python -X utf8 generate_news_cards.py --input data/exports/new_articles.csv --limit "$CARD_LIMIT" --clean
 
 run_step "sync_cms_from_csv.py" \
-    docker compose run --rm pnews-crawler python -X utf8 scripts/sync_cms_from_csv.py
+    docker compose --profile manual run --rm pnews-crawler python -X utf8 scripts/sync_cms_from_csv.py
 
 log "=== Cron Crawler finished successfully ==="
