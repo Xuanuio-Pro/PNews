@@ -12,7 +12,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from config.settings import BASE_DIR, DATA_DIR, resolve_data_path
 
@@ -75,6 +75,9 @@ REQUEST_RETRY_ATTEMPTS = 3
 REQUEST_RETRY_BACKOFF_SECONDS = 1
 JPEG_QUALITY = 92
 THUMBNAIL_OVERLAY_ALPHA = 28
+MAX_SHARP_COVER_UPSCALE = 1.35
+MAX_LOW_RES_FOREGROUND_UPSCALE = 1.25
+BLURRED_BACKGROUND_RADIUS = 18
 
 TEXT_DARK = (8, 20, 40)
 TEXT_SUMMARY = (10, 28, 52)
@@ -129,6 +132,7 @@ def download_image(url):
 
 def resize_and_crop(image, target_width, target_height):
     """Cover + center crop without distorting source image."""
+    image = ImageOps.exif_transpose(image).convert("RGB")
     source_width, source_height = image.size
     if source_width <= 0 or source_height <= 0:
         return Image.new("RGB", (target_width, target_height), (0, 0, 0))
@@ -150,6 +154,51 @@ def resize_and_crop(image, target_width, target_height):
     right = left + target_width
     bottom = top + target_height
     return resized.crop((left, top, right, bottom))
+
+
+def render_thumbnail_for_card(image, target_width, target_height):
+    """Render thumbnail without aggressively upscaling low-resolution sources."""
+    image = ImageOps.exif_transpose(image).convert("RGB")
+    if _cover_upscale_factor(image, target_width, target_height) <= MAX_SHARP_COVER_UPSCALE:
+        return _sharpen_for_card(resize_and_crop(image, target_width, target_height))
+    return _compose_low_resolution_thumbnail(image, target_width, target_height)
+
+
+def _compose_low_resolution_thumbnail(image, target_width, target_height):
+    background = resize_and_crop(image, target_width, target_height)
+    background = background.filter(ImageFilter.GaussianBlur(BLURRED_BACKGROUND_RADIUS))
+    background = Image.blend(background, Image.new("RGB", background.size, (7, 16, 28)), 0.18)
+
+    source_width, source_height = image.size
+    fit_scale = min(target_width / source_width, target_height / source_height)
+    scale = min(fit_scale, MAX_LOW_RES_FOREGROUND_UPSCALE)
+    foreground_size = (
+        max(1, int(round(source_width * scale))),
+        max(1, int(round(source_height * scale))),
+    )
+    foreground = image.resize(foreground_size, Image.Resampling.LANCZOS)
+    foreground = _sharpen_for_card(foreground)
+
+    canvas = background.convert("RGBA")
+    left = (target_width - foreground_size[0]) // 2
+    top = (target_height - foreground_size[1]) // 2
+    shadow = Image.new("RGBA", foreground_size, (0, 0, 0, 90))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(14))
+    shadow_top = min(max(0, top + 8), max(0, target_height - foreground_size[1]))
+    canvas.alpha_composite(shadow, (max(0, left), shadow_top))
+    canvas.paste(foreground, (left, top))
+    return canvas.convert("RGB")
+
+
+def _sharpen_for_card(image):
+    return image.filter(ImageFilter.UnsharpMask(radius=1.1, percent=110, threshold=3))
+
+
+def _cover_upscale_factor(image, target_width=THUMBNAIL_W, target_height=THUMBNAIL_H):
+    source_width, source_height = image.size
+    if source_width <= 0 or source_height <= 0:
+        return float("inf")
+    return max(target_width / source_width, target_height / source_height)
 
 
 def wrap_text(text, font, max_width, draw):
@@ -327,7 +376,7 @@ def _render_news_card_image(article, brand_name):
     draw = ImageDraw.Draw(canvas)
 
     thumbnail, used_fallback, thumbnail_source = _load_best_thumbnail(article)
-    thumbnail = resize_and_crop(thumbnail, THUMBNAIL_W, THUMBNAIL_H).convert("RGBA")
+    thumbnail = render_thumbnail_for_card(thumbnail, THUMBNAIL_W, THUMBNAIL_H).convert("RGBA")
     canvas.paste(thumbnail, (THUMBNAIL_X, THUMBNAIL_Y))
 
     dark_overlay = Image.new("RGBA", (THUMBNAIL_W, THUMBNAIL_H), (0, 0, 0, THUMBNAIL_OVERLAY_ALPHA))
@@ -543,33 +592,63 @@ def _trim_for_card(summary, max_length=320):
 
 
 def _load_best_thumbnail(article):
+    best_image = None
+    best_source = ""
+    best_score = float("-inf")
+
     for candidate in _thumbnail_candidates(article):
         image = download_image(candidate)
-        if image is not None:
-            return image, False, candidate
+        if image is None:
+            continue
+
+        score = _thumbnail_quality_score(image)
+        if score > best_score:
+            best_image = image
+            best_source = candidate
+            best_score = score
+
+    if best_image is not None:
+        upscale = _cover_upscale_factor(best_image)
+        if upscale > MAX_SHARP_COVER_UPSCALE:
+            LOGGER.warning(
+                "Thumbnail nguon nho (%sx%s, upscale %.2fx). Dung nen blur de tranh phong vo anh: %s",
+                best_image.size[0],
+                best_image.size[1],
+                upscale,
+                best_source,
+            )
+        return best_image, False, best_source
 
     fallback = _load_fallback_image(article)
     return fallback, True, "fallback:PNews"
 
 
+def _thumbnail_quality_score(image):
+    source_width, source_height = image.size
+    if source_width <= 0 or source_height <= 0:
+        return float("-inf")
+
+    upscale = _cover_upscale_factor(image)
+    pixel_ratio = (source_width * source_height) / (THUMBNAIL_W * THUMBNAIL_H)
+    source_ratio = source_width / source_height
+    target_ratio = THUMBNAIL_W / THUMBNAIL_H
+    aspect_penalty = abs(source_ratio - target_ratio) / target_ratio
+    return (1 / max(upscale, 0.01)) + min(pixel_ratio, 2.0) * 0.18 - aspect_penalty * 0.08
+
+
 def _thumbnail_candidates(article):
     candidates = []
+    article_url = str(article.get("url", "") or "").strip()
+    if _is_http_url(article_url):
+        article_image = _extract_article_image_url(article_url)
+        if article_image:
+            candidates.extend(_image_url_variants(article_image))
+
     for key in ("thumbnail", "image_url", "cover_image", "local_image", "uploaded_image"):
         value = str(article.get(key, "") or "").strip()
         if not value:
             continue
         candidates.extend(_image_url_variants(value))
-
-    # Fast path: when direct thumbnail candidates already exist, skip fetching
-    # article HTML for og:image to avoid extra network latency per article.
-    if candidates:
-        return _dedupe(candidates)
-
-    article_url = str(article.get("url", "") or "").strip()
-    if _is_http_url(article_url):
-        article_image = _extract_article_image_url(article_url)
-        if article_image:
-            candidates.insert(0, article_image)
 
     return _dedupe(candidates)
 
@@ -633,13 +712,48 @@ def _extract_content_image_url(soup, article_url):
                 if not value:
                     continue
                 if "srcset" in attr:
-                    value = value.split(",")[0].strip().split(" ")[0]
+                    value = _best_srcset_url(value)
+                    if not value:
+                        continue
                 if value.startswith("data:"):
                     continue
                 image_url = urljoin(article_url, value)
                 if _looks_like_content_image(image_url):
                     return image_url
     return ""
+
+
+def _best_srcset_url(srcset):
+    best_url = ""
+    best_width = -1.0
+    fallback_url = ""
+
+    for raw_item in str(srcset or "").split(","):
+        parts = raw_item.strip().split()
+        if not parts:
+            continue
+
+        url = parts[0]
+        fallback_url = url
+        width = 0.0
+        for descriptor in parts[1:]:
+            descriptor = descriptor.strip().lower()
+            if descriptor.endswith("w"):
+                try:
+                    width = max(width, float(descriptor[:-1]))
+                except ValueError:
+                    pass
+            elif descriptor.endswith("x"):
+                try:
+                    width = max(width, float(descriptor[:-1]) * THUMBNAIL_W)
+                except ValueError:
+                    pass
+
+        if width >= best_width:
+            best_url = url
+            best_width = width
+
+    return best_url or fallback_url
 
 
 def _looks_like_content_image(url):
@@ -737,6 +851,10 @@ def _image_url_variants(url):
         return [url]
 
     variants = [url]
+    parsed = urlparse(url)
+    if _has_signed_image_query(parsed):
+        return variants
+
     stripped = _strip_query(url)
     if stripped != url:
         variants.insert(0, stripped)
@@ -745,6 +863,12 @@ def _image_url_variants(url):
     if upgraded != url:
         variants.insert(0, upgraded)
     return variants
+
+
+def _has_signed_image_query(parsed_url):
+    query = dict(parse_qsl(parsed_url.query, keep_blank_values=True))
+    signature_keys = {"s", "sig", "signature", "token", "auth", "expires", "exp"}
+    return any(key.lower() in signature_keys for key in query)
 
 
 def _strip_query(url):
@@ -756,12 +880,25 @@ def _upgrade_thumbnail_url(url):
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         return url
+    if _has_signed_image_query(parsed):
+        return url
 
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-    if "w" in query or "h" in query:
-        query["w"] = str(THUMBNAIL_W)
-        query["h"] = str(THUMBNAIL_H)
-        query["q"] = "100"
+    width_keys = ("w", "width", "maxwidth", "imgmax")
+    height_keys = ("h", "height", "maxheight")
+    quality_keys = ("q", "quality")
+
+    if any(key in query for key in width_keys + height_keys):
+        for key in width_keys:
+            if key in query:
+                query[key] = str(THUMBNAIL_W)
+        for key in height_keys:
+            if key in query:
+                query[key] = str(THUMBNAIL_H)
+        for key in quality_keys:
+            if key in query:
+                query[key] = "100"
+        query.setdefault("q", "100")
         query["dpr"] = "1"
         query.setdefault("fit", "crop")
 

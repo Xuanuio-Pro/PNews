@@ -28,6 +28,7 @@ from services.facebook_service import (
     FacebookConfigError,
     FacebookPublishError,
     buildFacebookCaption,
+    formatArticlePublishedAt,
     getPostInfo,
     publishMultiPhotoPost,
     publishPhotoPost,
@@ -526,11 +527,14 @@ def build_facebook_bulk_caption(articles):
         summary = str(article.get("summary") or "").strip()
         source = str(article.get("source") or "PNews").strip()
         url = str(article.get("url") or "").strip()
+        published_at = formatArticlePublishedAt(article)
 
         parts.append(f"{index}. {title}")
         if summary:
             parts.append(summary)
         parts.append(f"Nguồn: {source}")
+        if published_at:
+            parts.append(f"Ngày/giờ bài báo: {published_at}")
         if url:
             parts.append(f"🔗 Xem chi tiết: {url}")
         parts.append("")
@@ -2336,6 +2340,161 @@ def render_article_detail(article_id):
     return render_client_page(article["title"], body)
 
 
+LEGAL_PAGES = {
+    "/privacy-policy": {
+        "title": "Chính sách quyền riêng tư",
+        "eyebrow": "Privacy Policy",
+        "summary": "PNews tôn trọng quyền riêng tư của người dùng và chỉ xử lý dữ liệu cần thiết để vận hành dịch vụ.",
+        "sections": [
+            (
+                "Dữ liệu chúng tôi thu thập",
+                [
+                    "Thông tin người dùng chủ động cung cấp khi đăng nhập, gửi yêu cầu hỗ trợ, quản trị nội dung hoặc tương tác với các tính năng của PNews.",
+                    "Thông tin kỹ thuật như địa chỉ IP, thiết bị, trình duyệt, thời gian truy cập và nhật ký lỗi để bảo vệ hệ thống và cải thiện trải nghiệm.",
+                    "Nội dung bài viết, hình ảnh, liên kết và thông tin cấu hình được người quản trị tải lên hoặc phê duyệt trong hệ thống.",
+                ],
+            ),
+            (
+                "Mục đích sử dụng",
+                [
+                    "Cung cấp, bảo trì, bảo mật và cải thiện các tính năng tổng hợp tin, quản trị nội dung, chatbot và đăng tải lên kênh truyền thông được cấu hình.",
+                    "Xử lý yêu cầu hỗ trợ, chặn hành vi lạm dụng, phân tích lỗi kỹ thuật và thực hiện các nghĩa vụ pháp lý khi cần thiết.",
+                ],
+            ),
+            (
+                "Chia sẻ dữ liệu",
+                [
+                    "PNews không bán dữ liệu cá nhân của người dùng.",
+                    "Dữ liệu có thể được gửi đến nhà cung cấp hạ tầng, dịch vụ lưu trữ, dịch vụ thông báo hoặc nền tảng bên thứ ba khi người quản trị kích hoạt tích hợp tương ứng.",
+                    "Việc chia sẻ chỉ diễn ra trong phạm vi cần thiết để vận hành dịch vụ, bảo mật hệ thống hoặc tuân thủ quy định pháp luật.",
+                ],
+            ),
+            (
+                "Lưu trữ và bảo mật",
+                [
+                    "Dữ liệu được lưu trong hệ thống PNews và các dịch vụ hạ tầng được cấu hình bởi đơn vị vận hành.",
+                    "Chúng tôi áp dụng các biện pháp hợp lý như phân quyền truy cập, cookie phiên quản trị và nhật ký hệ thống để giảm rủi ro truy cập trái phép.",
+                ],
+            ),
+            (
+                "Quyền của người dùng",
+                [
+                    "Người dùng có thể yêu cầu truy cập, chỉnh sửa hoặc xóa dữ liệu liên quan đến mình theo hướng dẫn tại trang Data Deletion.",
+                    "Nếu có câu hỏi về quyền riêng tư, vui lòng liên hệ đơn vị vận hành PNews qua kênh hỗ trợ chính thức của bạn.",
+                ],
+            ),
+        ],
+    },
+    "/data-deletion": {
+        "title": "Xóa dữ liệu người dùng",
+        "eyebrow": "Data Deletion",
+        "summary": "Trang này hướng dẫn cách yêu cầu xóa dữ liệu cá nhân hoặc dữ liệu liên quan đến tài khoản khỏi PNews.",
+        "sections": [
+            (
+                "Cách gửi yêu cầu xóa dữ liệu",
+                [
+                    "Gửi yêu cầu đến đơn vị vận hành PNews qua email hỗ trợ hoặc kênh liên hệ chính thức, kèm thông tin nhận diện tài khoản hoặc nội dung cần xóa.",
+                    "Nếu bạn đang sử dụng tính năng đăng nhập hoặc tích hợp Facebook, hãy cung cấp Facebook User ID, Page ID hoặc đường dẫn nội dung liên quan nếu có.",
+                    "Tiêu đề đề xuất: Yêu cầu xóa dữ liệu PNews.",
+                ],
+            ),
+            (
+                "Quy trình xử lý",
+                [
+                    "Chúng tôi sẽ xác minh yêu cầu để đảm bảo người gửi có quyền đối với dữ liệu cần xóa.",
+                    "Sau khi xác minh, dữ liệu cá nhân liên quan sẽ được xóa hoặc ẩn danh hóa trong thời gian hợp lý, trừ trường hợp cần lưu lại để bảo mật, giải quyết tranh chấp hoặc tuân thủ pháp luật.",
+                    "Người gửi sẽ nhận được thông báo khi yêu cầu đã được xử lý.",
+                ],
+            ),
+            (
+                "Phạm vi xóa",
+                [
+                    "Yêu cầu có thể bao gồm thông tin tài khoản, nhật ký tương tác, nội dung đã tải lên và dữ liệu tích hợp với bên thứ ba trong phạm vi PNews kiểm soát.",
+                    "Nội dung đã được đăng công khai lên nền tảng bên thứ ba có thể cần được xóa trực tiếp trên nền tảng đó theo chính sách riêng của họ.",
+                ],
+            ),
+        ],
+    },
+    "/terms": {
+        "title": "Điều khoản sử dụng",
+        "eyebrow": "Terms of Service",
+        "summary": "Bằng việc truy cập hoặc sử dụng PNews, bạn đồng ý với các điều khoản sử dụng dưới đây.",
+        "sections": [
+            (
+                "Phạm vi dịch vụ",
+                [
+                    "PNews cung cấp công cụ tổng hợp, quản trị, duyệt và phân phối nội dung tin tức cho đơn vị vận hành.",
+                    "Một số tính năng có thể phụ thuộc vào cấu hình hệ thống, tài khoản quản trị, API bên thứ ba hoặc hạ tầng triển khai.",
+                ],
+            ),
+            (
+                "Trách nhiệm người dùng",
+                [
+                    "Người dùng phải đảm bảo thông tin đăng nhập được bảo mật và chỉ sử dụng hệ thống cho mục đích hợp pháp.",
+                    "Người quản trị chịu trách nhiệm về nội dung tải lên, phê duyệt, chỉnh sửa, xuất bản hoặc chia sẻ từ PNews.",
+                    "Không được sử dụng dịch vụ để phát tán nội dung vi phạm pháp luật, xâm phạm quyền sở hữu trí tuệ, quyền riêng tư hoặc lợi ích hợp pháp của bên thứ ba.",
+                ],
+            ),
+            (
+                "Nội dung và bên thứ ba",
+                [
+                    "PNews có thể hiển thị liên kết, tóm tắt, hình ảnh hoặc dữ liệu từ nguồn tin và nền tảng bên thứ ba.",
+                    "Chúng tôi không kiểm soát toàn bộ nội dung, tính sẵn sàng hoặc chính sách của các dịch vụ bên thứ ba.",
+                ],
+            ),
+            (
+                "Giới hạn trách nhiệm",
+                [
+                    "Dịch vụ được cung cấp theo hiện trạng. PNews không đảm bảo hệ thống luôn không lỗi, không gián đoạn hoặc phù hợp với mọi mục đích riêng biệt.",
+                    "Trong phạm vi pháp luật cho phép, đơn vị vận hành không chịu trách nhiệm cho thiệt hại gián tiếp phát sinh từ việc sử dụng hoặc không thể sử dụng dịch vụ.",
+                ],
+            ),
+            (
+                "Thay đổi điều khoản",
+                [
+                    "Các điều khoản có thể được cập nhật theo nhu cầu vận hành, thay đổi tính năng hoặc yêu cầu pháp lý.",
+                    "Việc tiếp tục sử dụng PNews sau khi điều khoản được cập nhật đồng nghĩa với việc chấp nhận phiên bản mới.",
+                ],
+            ),
+        ],
+    },
+}
+
+
+def render_legal_page(path):
+    page = LEGAL_PAGES.get(path)
+    if not page:
+        return render_not_found()
+
+    sections = []
+    for heading, items in page["sections"]:
+        list_items = "".join(f"<li>{escape(item)}</li>" for item in items)
+        sections.append(
+            f"""
+            <section class="legal-section">
+              <h2>{escape(heading)}</h2>
+              <ul>{list_items}</ul>
+            </section>
+            """
+        )
+
+    body = f"""
+    <article class="legal-page">
+      <p class="eyebrow">{escape(page["eyebrow"])}</p>
+      <h1>{escape(page["title"])}</h1>
+      <p class="legal-summary">{escape(page["summary"])}</p>
+      <p class="legal-updated">Cập nhật lần cuối: 09/06/2026</p>
+      {"".join(sections)}
+      <div class="legal-actions">
+        <a class="text-link" href="/privacy-policy">Privacy Policy</a>
+        <a class="text-link" href="/data-deletion">Data Deletion</a>
+        <a class="text-link" href="/terms">Terms</a>
+      </div>
+    </article>
+    """
+    return render_client_page(page["title"], body, extra_class="legal")
+
+
 def render_admin_login(error=""):
     error_html = f'<p class="form-error">{escape(error)}</p>' if error else ""
     body = f"""
@@ -3080,6 +3239,8 @@ class CMSHandler(BaseHTTPRequestHandler):
                 "time": now_iso(),
                 "app": "PNews"
             }, status=status_code)
+        elif path in LEGAL_PAGES:
+            self.respond_html(render_legal_page(path))
         elif path == "/client":
             self.respond_html(render_client_home(query))
         elif path.startswith("/client/article/"):

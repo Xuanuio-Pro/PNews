@@ -2,6 +2,7 @@ import logging
 import mimetypes
 import os
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -43,6 +44,41 @@ def _clean(value):
     return str(value or "").strip()
 
 
+def formatArticlePublishedAt(article):
+    raw_value = (
+        _clean(_article_value(article, "published_at"))
+        or _clean(_article_value(article, "crawled_at"))
+        or _clean(_article_value(article, "created_at"))
+    )
+    if not raw_value:
+        return ""
+
+    normalized = raw_value.replace("T", " ").replace("Z", "").strip()
+    if "+" in normalized:
+        normalized = normalized.split("+", 1)[0].strip()
+
+    for date_format in (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%d/%m/%Y",
+    ):
+        try:
+            parsed = datetime.strptime(normalized, date_format)
+        except ValueError:
+            continue
+        if "%H" in date_format:
+            return parsed.strftime("%d/%m/%Y %H:%M")
+        return parsed.strftime("%d/%m/%Y")
+
+    return raw_value
+
+
 def _config():
     load_env_file()
     page_id = _clean(os.environ.get("FACEBOOK_PAGE_ID"))
@@ -82,6 +118,7 @@ def buildFacebookCaption(article):
     )
     source = _clean(_article_value(article, "source")) or "PNews"
     url = _clean(_article_value(article, "url"))
+    published_at = formatArticlePublishedAt(article)
 
     parts = [
         "📌 TIN MỚI TỪ PNEWS",
@@ -92,6 +129,8 @@ def buildFacebookCaption(article):
         "",
         f"Nguồn: {source}",
     ]
+    if published_at:
+        parts.append(f"Ngày/giờ bài báo: {published_at}")
     if url:
         parts.append(f"🔗 Xem chi tiết: {url}")
     parts.extend(
@@ -315,6 +354,7 @@ def getPostInfo(post_id):
 
 
 build_facebook_caption = buildFacebookCaption
+format_article_published_at = formatArticlePublishedAt
 publish_link_post = publishLinkPost
 publish_multi_photo_post = publishMultiPhotoPost
 publish_photo_post = publishPhotoPost
