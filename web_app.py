@@ -98,6 +98,7 @@ SESSION_COOKIE = "pnews_cms_session"
 SESSIONS = set()
 CLIENT_PAGE_SIZE = 12
 ADMIN_PAGE_SIZE = 12
+CLIENT_CONFIG_PAGE_SIZE = 12
 CLIENT_ORDER_UNSET_SORT = 2_147_483_647
 CLIENT_TOPIC_ORDER = [
     "Tin tức chung",
@@ -2152,6 +2153,7 @@ def render_admin_head_actions(active_nav="articles"):
     actions = [
         ("dashboard", "Xem tổng quan", "/admin/dashboard", "ghost", False),
         ("articles", "Duyệt bài", "/admin", "primary", False),
+        ("client_config", "Cấu hình client", "/admin/client-config", "primary", False),
         ("upload", "Tải ấn phẩm", "/admin/upload", "primary", False),
         ("client", "Xem client", "/client", "ghost", True),
     ]
@@ -2167,6 +2169,7 @@ def render_admin_head_actions(active_nav="articles"):
 def render_admin_page(title, body, extra_class="", active_nav="articles"):
     dashboard_active = "active" if active_nav == "dashboard" else ""
     articles_active = "active" if active_nav == "articles" else ""
+    client_config_active = "active" if active_nav == "client_config" else ""
     upload_active = "active" if active_nav == "upload" else ""
     return f"""<!doctype html>
 <html lang="vi">
@@ -2185,6 +2188,7 @@ def render_admin_page(title, body, extra_class="", active_nav="articles"):
     <nav class="admin-nav">
       <a class="{dashboard_active}" href="/admin/dashboard">Tổng quan</a>
       <a class="{articles_active}" href="/admin">Duyệt bài</a>
+      <a class="{client_config_active}" href="/admin/client-config">Cấu hình client</a>
       <a class="{upload_active}" href="/admin/upload">Tải ấn phẩm</a>
       <a href="/client" target="_blank" rel="noopener">Xem client</a>
     </nav>
@@ -2983,6 +2987,183 @@ def render_admin_dashboard(query):
     return render_admin_page("Admin", body)
 
 
+def client_config_date_filter_from_query(query):
+    if "date" not in query:
+        return ""
+    return admin_date_filter_from_query(query)
+
+
+def client_config_filter_url(q="", source="", topic="", date_filter=None, notice="", page=1):
+    try:
+        page_number = max(1, int(page or 1))
+    except (TypeError, ValueError):
+        page_number = 1
+
+    parts = []
+    if q:
+        parts.append(f"q={quote(q)}")
+    if source:
+        parts.append(f"source={quote(source)}")
+    if topic:
+        parts.append(f"topic={quote(topic)}")
+    if date_filter == "":
+        parts.append("date=all")
+    elif date_filter:
+        parts.append(f"date={quote(str(date_filter))}")
+    if page_number > 1:
+        parts.append(f"page={page_number}")
+    if notice:
+        parts.append(f"notice={quote(notice)}")
+    return "/admin/client-config" + (("?" + "&".join(parts)) if parts else "")
+
+
+def render_client_config_page(query):
+    q = (query.get("q") or [""])[0].strip()
+    source = (query.get("source") or [""])[0].strip()
+    topic = resolve_client_topic((query.get("topic") or [""])[0].strip())
+    date_filter = client_config_date_filter_from_query(query)
+    notice = (query.get("notice") or [""])[0].strip()
+    page = parse_page(query)
+    total = count_articles(
+        status="approved",
+        q=q,
+        source=source,
+        topic=topic,
+        date_filter=date_filter,
+        canonical_topic=True,
+    )
+    page = min(page, max(1, (total + CLIENT_CONFIG_PAGE_SIZE - 1) // CLIENT_CONFIG_PAGE_SIZE))
+    articles = query_articles(
+        status="approved",
+        q=q,
+        source=source,
+        topic=topic,
+        date_filter=date_filter,
+        limit=CLIENT_CONFIG_PAGE_SIZE,
+        offset=(page - 1) * CLIENT_CONFIG_PAGE_SIZE,
+        canonical_topic=True,
+    )
+    updated_images = ensure_generated_images_for_rows(articles, limit=CLIENT_CONFIG_PAGE_SIZE)
+    if updated_images:
+        articles = query_articles(
+            status="approved",
+            q=q,
+            source=source,
+            topic=topic,
+            date_filter=date_filter,
+            limit=CLIENT_CONFIG_PAGE_SIZE,
+            offset=(page - 1) * CLIENT_CONFIG_PAGE_SIZE,
+            canonical_topic=True,
+        )
+
+    sources = get_sources(status="approved")
+    topics = get_client_topics(status="approved")
+    source_options = render_select_options(sources, source, "Tất cả tờ báo")
+    topic_options = render_select_options(topics, topic, "Tất cả chủ đề")
+    today_link = client_config_filter_url(q, source, topic, date_filter=today_iso_date())
+    all_dates_link = client_config_filter_url(q, source, topic, date_filter="")
+    date_controls = render_date_filter_controls(date_filter, today_link, all_dates_link)
+    notice_html = f'<p class="form-success">{escape(notice)}</p>' if notice else ""
+    rows = "\n".join(
+        render_client_config_item(article, q, source, topic, date_filter, page)
+        for article in articles
+    )
+    if not rows:
+        rows = """
+        <section class="empty-state compact">
+          <h2>Chưa có bài đã duyệt</h2>
+          <p>Hãy duyệt bài ở trang Duyệt bài trước khi cấu hình client.</p>
+        </section>
+        """
+
+    pagination = render_pagination(
+        "/admin/client-config",
+        page,
+        total,
+        CLIENT_CONFIG_PAGE_SIZE,
+        {"q": q, "source": source, "topic": topic, "date": date_filter or "all"},
+    )
+
+    body = f"""
+    <section class="admin-head">
+      <div>
+        <p class="eyebrow">Client</p>
+        <h1>Cấu hình trang client</h1>
+        <p>Sắp xếp thứ tự, chỉnh sửa nội dung và kiểm tra các bài đã duyệt đang hiển thị ngoài client.</p>
+      </div>
+      {render_admin_head_actions("client_config")}
+    </section>
+    <form class="admin-search client-config-search" method="get" action="/admin/client-config" data-auto-submit>
+      <input type="search" name="q" placeholder="Tìm bài đã duyệt..." value="{escape(q)}">
+      <select name="source" aria-label="Lọc theo tờ báo">{source_options}</select>
+      <select name="topic" aria-label="Lọc theo chủ đề">{topic_options}</select>
+      {date_controls}
+    </form>
+    {notice_html}
+    <section class="client-config-summary">
+      <span>{int(total or 0)} bài đã duyệt</span>
+      <span>{CLIENT_CONFIG_PAGE_SIZE} bài mỗi trang</span>
+      <span>Thứ tự thủ công ưu tiên số nhỏ trước</span>
+    </section>
+    <section class="client-config-list">{rows}</section>
+    {pagination}
+    """
+    return render_admin_page("Cấu hình client", body, active_nav="client_config")
+
+
+def render_client_config_item(article, q, source, topic, date_filter, page):
+    image_url = article_image_url(article)
+    summary_text = article_display_summary(article, context="admin")
+    topic_label = client_topic_label(article)
+    client_order = article_client_order(article)
+    display_order = f"#{client_order}" if client_order > 0 else "Mặc định"
+    image = (
+        f'<img src="{escape(image_url)}" alt="{escape(article["title"])}" loading="lazy">'
+        if image_url
+        else '<div class="image-fallback admin">PNews</div>'
+    )
+    source_link = (
+        f'<a class="button ghost compact" href="{escape(article["url"])}" target="_blank" rel="noopener">Bài gốc</a>'
+        if article["url"]
+        else ""
+    )
+    client_preview_url = f"/client/article/{int(article['id'])}"
+    published_at = article["published_at"] or article["crawled_at"] or "Chưa rõ"
+    return f"""
+    <article class="client-config-item">
+      <a class="client-config-image" href="{escape(client_preview_url)}" target="_blank" rel="noopener">{image}</a>
+      <div class="client-config-content">
+        <div class="meta-line">
+          <span>{escape(article['source'] or 'PNews')}</span>
+          <span>{escape(topic_label or 'Chưa phân loại')}</span>
+          <span class="badge client-order-badge">Client: {escape(display_order)}</span>
+        </div>
+        <h2>{escape(article['title'])}</h2>
+        <p>{escape(summary_text)}</p>
+        <div class="date-line">
+          <span>Ngày đăng: {escape(published_at)}</span>
+          <span>Cập nhật: {escape(article['updated_at'] or 'Chưa rõ')}</span>
+        </div>
+      </div>
+      <div class="client-config-actions">
+        <form class="client-order-form" method="post">
+          <input type="hidden" name="return_view" value="client_config">
+          <input type="hidden" name="return_q" value="{escape(q)}">
+          <input type="hidden" name="return_source" value="{escape(source)}">
+          <input type="hidden" name="return_topic" value="{escape(topic)}">
+          <input type="hidden" name="return_date" value="{escape(date_filter or 'all')}">
+          <input type="hidden" name="return_page" value="{escape(page)}">
+          <button class="button ghost compact" type="submit" name="direction" value="up" formaction="/admin/articles/{article['id']}/move-client">Lên</button>
+          <button class="button ghost compact" type="submit" name="direction" value="down" formaction="/admin/articles/{article['id']}/move-client">Xuống</button>
+        </form>
+        <a class="button primary compact" href="/admin/articles/{article['id']}/edit">Chỉnh sửa</a>
+        <a class="button ghost compact" href="{escape(client_preview_url)}" target="_blank" rel="noopener">Xem client</a>
+        {source_link}
+      </div>
+    </article>
+    """
+
+
 def admin_filter_url(status, q="", source="", topic="", date_filter=None, notice="", page=1):
     try:
         page_number = max(1, int(page or 1))
@@ -3274,7 +3455,8 @@ def render_article_edit_form(article_id, error="", success=""):
         <p>Cập nhật nội dung hiển thị trên client và caption Facebook kế tiếp.</p>
       </div>
       <div class="admin-actions">
-        <a class="button ghost" href="/admin?status={escape(article['status'])}">Về danh sách</a>
+        <a class="button ghost" href="/admin/client-config">Về cấu hình client</a>
+        <a class="button ghost" href="/admin?status={escape(article['status'])}">Về danh sách duyệt</a>
         <a class="button ghost" href="/client" target="_blank" rel="noopener">Xem client</a>
       </div>
     </section>
@@ -3295,11 +3477,11 @@ def render_article_edit_form(article_id, error="", success=""):
       <label>Ảnh mới<input name="image" type="file" accept="image/*"></label>
       <div class="form-actions">
         <button class="button primary" type="submit">Lưu thay đổi</button>
-        <a class="button ghost" href="/admin?status={escape(article['status'])}">Hủy</a>
+        <a class="button ghost" href="/admin/client-config">Hủy</a>
       </div>
     </form>
     """
-    return render_admin_page("Chỉnh sửa bài viết", body, active_nav="articles")
+    return render_admin_page("Chỉnh sửa bài viết", body, active_nav="client_config")
 
 
 def render_upload_form(error="", success=""):
@@ -3448,6 +3630,8 @@ class CMSHandler(BaseHTTPRequestHandler):
             self.require_admin(lambda: self.respond_html(render_admin_overview_dashboard()))
         elif path in {"/admin/dashboarh", "/admin/dashbord"}:
             self.redirect("/admin/dashboard")
+        elif path == "/admin/client-config":
+            self.require_admin(lambda: self.respond_html(render_client_config_page(query)))
         elif path == "/admin/upload":
             self.require_admin(lambda: self.respond_html(render_upload_form()))
         elif re.fullmatch(r"/admin/articles/\d+/edit", path):
@@ -3906,6 +4090,7 @@ class CMSHandler(BaseHTTPRequestHandler):
 
     def admin_return_url_from_fields(self, fields, default_status="approved", notice=""):
         fields = fields or {}
+        return_view = (fields.get("return_view") or [""])[0]
         return_status = (fields.get("return_status") or [default_status])[0]
         return_q = (fields.get("return_q") or [""])[0].strip()
         return_source = (fields.get("return_source") or [""])[0].strip()
@@ -3913,6 +4098,15 @@ class CMSHandler(BaseHTTPRequestHandler):
         return_date_raw = (fields.get("return_date") or [today_iso_date()])[0].strip()
         return_date = "" if return_date_raw == "all" else return_date_raw
         return_page = (fields.get("return_page") or ["1"])[0].strip()
+        if return_view == "client_config":
+            return client_config_filter_url(
+                return_q,
+                return_source,
+                return_topic,
+                date_filter=return_date,
+                notice=notice,
+                page=return_page,
+            )
         return admin_filter_url(
             return_status or default_status,
             return_q,

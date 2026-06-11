@@ -272,6 +272,7 @@ Trang admin:
 
 - `/admin/dashboard`: xem tong quan.
 - `/admin`: duyet, tu choi, xoa, go khoi client; moi trang hien 12 bai.
+- `/admin/client-config`: trang rieng de cau hinh thu tu va chinh sua noi dung client.
 - `/admin/upload`: tai an pham/bai viet thu cong.
 - Bai da duyet co the `Chinh sua`, sap xep `Len`/`Xuong` tren client va export PNG.
 - Xem them `docs/ADMIN_CONTENT_MANAGEMENT.md` de nam luong chinh sua noi dung, thu tu client va caption Facebook.

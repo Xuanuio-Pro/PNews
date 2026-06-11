@@ -25,6 +25,7 @@ Tat ca route admin can session hop le:
 /admin
 /admin/dashboard
 /dashboard
+/admin/client-config
 /admin/upload
 /admin/articles/*
 /admin/bulk

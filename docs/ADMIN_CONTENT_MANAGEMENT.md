@@ -8,6 +8,24 @@ Tai lieu nay mo ta cac luong quan tri noi dung moi trong PNews CMS: phan trang a
 - Bo loc ngay mac dinh la ngay hien tai; bam `Tat ca ngay` de xem toan bo bai.
 - Cac thao tac hang loat van chi ap dung cho cac bai da tick tren trang hien tai.
 
+## Trang cau hinh client
+
+Admin co trang rieng:
+
+```text
+GET /admin/client-config
+```
+
+Trang nay dung de quan ly cac bai da duyet dang hien thi tren client:
+
+- Xem toan bo bai `approved` mac dinh, khong bi gioi han theo ngay hom nay.
+- Tim kiem theo tieu de, tom tat, nguon.
+- Loc theo nguon, chu de va ngay.
+- Xem thu tu hien tai cua tung bai tren client.
+- Sap xep `Len`/`Xuong`.
+- Mo form `Chinh sua`.
+- Mo nhanh trang client hoac bai goc.
+
 ## Cau hinh bai da duyet tren client
 
 Voi bai co trang thai `approved`, admin co them cac nut:
@@ -15,6 +33,8 @@ Voi bai co trang thai `approved`, admin co them cac nut:
 - `Chinh sua`: mo form sua noi dung hien thi tren client va caption Facebook ke tiep.
 - `Len`: dua bai len cao hon trong thu tu client.
 - `Xuong`: dua bai xuong thap hon trong thu tu client.
+
+Trong trang `/admin/client-config`, sau khi bam `Len`/`Xuong`, app se quay lai dung bo loc va trang dang xem.
 
 He thong luu thu tu bang cot `client_order` trong SQLite:
 

@@ -31,7 +31,7 @@ Co the them nhieu tai khoan bang JSON object hoac dung dang ngan cach `user:pass
 4. Client tai `/client` chi hien thi cac bai da duyet/dang.
 5. Admin co the upload an pham moi tai `/admin/upload`.
 6. Dashboard tai `/admin/dashboard` hien thi tong quan nguon bao, chu de, bai moi, trang thai Facebook va canh bao chat luong; cac chi so khong co du lieu hien `0`.
-7. Admin co the chinh sua noi dung bai da duyet va sap xep thu tu hien thi tren client. Xem `docs/ADMIN_CONTENT_MANAGEMENT.md`.
+7. Admin co the vao `/admin/client-config` de chinh sua noi dung bai da duyet va sap xep thu tu hien thi tren client. Xem `docs/ADMIN_CONTENT_MANAGEMENT.md`.
 
 ## Dieu huong va trai nghiem admin
 
@@ -41,7 +41,7 @@ Co the them nhieu tai khoan bang JSON object hoac dung dang ngan cach `user:pass
 - Trang duyet bai hien 12 bai tren moi trang.
 - Trang duyet bai mac dinh loc theo ngay hom nay, chan ngay tuong lai va co nut `Tat ca ngay` de xem toan bo.
 - Bai da duyet co nut `Export PNG`; nut export hang loat bi khoa cho den khi tick it nhat mot bai.
-- Bai da duyet co nut `Chinh sua`, `Len`, `Xuong` de cau hinh noi dung va thu tu tren client.
+- Trang `/admin/client-config` la man rieng de cau hinh noi dung va thu tu client; mac dinh hien toan bo bai da duyet.
 - Nut `Mo bai` rieng da duoc bo; admin click vao anh an pham, tieu de, tom tat hoac link `Bai goc` de mo dung URL bai bao.
 - Phan ngay dang, crawl, cap nhat va ngay duyet chi dung de xem thong tin, khong bat click mo bai.
 
