@@ -1226,6 +1226,11 @@ code {
   color: var(--red);
 }
 
+.client-order-badge {
+  background: #eef7f4;
+  color: var(--green);
+}
+
 .facebook-preview {
   margin: 12px 0;
   overflow: hidden;
@@ -1319,6 +1324,27 @@ code {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.edit-image-preview {
+  display: block;
+  width: min(260px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #e7eef3;
+}
+
+.edit-image-preview img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
 }
 
 .form-error,
@@ -1738,7 +1764,8 @@ code {
 
   .bulk-actions .button,
   .admin-actions .button,
-  .detail-actions .button {
+  .detail-actions .button,
+  .form-actions .button {
     width: 100%;
   }
 

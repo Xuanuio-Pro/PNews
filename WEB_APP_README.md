@@ -31,14 +31,17 @@ Co the them nhieu tai khoan bang JSON object hoac dung dang ngan cach `user:pass
 4. Client tai `/client` chi hien thi cac bai da duyet/dang.
 5. Admin co the upload an pham moi tai `/admin/upload`.
 6. Dashboard tai `/admin/dashboard` hien thi tong quan nguon bao, chu de, bai moi, trang thai Facebook va canh bao chat luong; cac chi so khong co du lieu hien `0`.
+7. Admin co the chinh sua noi dung bai da duyet va sap xep thu tu hien thi tren client. Xem `docs/ADMIN_CONTENT_MANAGEMENT.md`.
 
 ## Dieu huong va trai nghiem admin
 
 - Moi trang admin hien thi 3 nut dieu huong nhanh toi cac trang con lai: tong quan, duyet bai, tai an pham va client.
 - Khi admin bam sang `/client`, session admin se bi xoa; quay lai `/admin` hoac `/admin/dashboard` phai dang nhap lai. Xem them `docs/ADMIN_CLIENT_AUTH_FLOW.md`.
 - Trang duyet bai cho phep chon nhieu bai va hien thong bao cho khi dang xu ly duyet/xoa/go khoi client.
+- Trang duyet bai hien 12 bai tren moi trang.
 - Trang duyet bai mac dinh loc theo ngay hom nay, chan ngay tuong lai va co nut `Tat ca ngay` de xem toan bo.
 - Bai da duyet co nut `Export PNG`; nut export hang loat bi khoa cho den khi tick it nhat mot bai.
+- Bai da duyet co nut `Chinh sua`, `Len`, `Xuong` de cau hinh noi dung va thu tu tren client.
 - Nut `Mo bai` rieng da duoc bo; admin click vao anh an pham, tieu de, tom tat hoac link `Bai goc` de mo dung URL bai bao.
 - Phan ngay dang, crawl, cap nhat va ngay duyet chi dung de xem thong tin, khong bat click mo bai.
 
@@ -50,6 +53,7 @@ Co the them nhieu tai khoan bang JSON object hoac dung dang ngan cach `user:pass
 - `Tin tuc PTIT` loc rieng cac bai nguon PTIT.
 - Client co bo loc ngay giong admin: mac dinh hom nay, khong chon ngay tuong lai, co nut `Tat ca ngay`.
 - Form loc admin/client tu dong submit khi doi tu khoa, nguon, chu de hoac ngay nen khong can nut `Tim`.
+- Neu bai co `client_order > 0`, client uu tien thu tu admin da sap xep; bai chua sap xep van theo thu tu moi nhat.
 - Neu cac bai cung ngay, bai PTIT duoc uu tien trong nhom ngay do; bai moi hon van duoc dua len truoc.
 
 ## Du lieu va media
@@ -117,6 +121,9 @@ Hanh vi dang Facebook:
 - Dang 1 bai: upload anh an pham cua bai do len Facebook Page.
 - Dang nhieu bai: tao 1 bai Facebook duy nhat, dinh kem tat ca anh an pham da chon bang multi-photo post.
 - He thong khong ghep cac anh an pham thanh mot file anh duy nhat.
+- Caption chi co mot dong `Cap nhat ngay ...` cho ca post, khong hien ngay/gio rieng tung bai.
+- Caption khong them footer `PNews tu dong tong hop...`.
+- Preview Facebook cua bai chua dang luon sinh caption moi tu noi dung hien tai; bai da dang thanh cong giu caption lich su.
 
 Test ket noi Graph API:
 

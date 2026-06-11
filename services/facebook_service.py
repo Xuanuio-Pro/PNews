@@ -79,6 +79,14 @@ def formatArticlePublishedAt(article):
     return raw_value
 
 
+def formatFacebookPostUpdatedAt(value=None):
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        parsed = datetime.now()
+    return parsed.strftime("%d/%m/%Y %H:%M")
+
+
 def _config():
     load_env_file()
     page_id = _clean(os.environ.get("FACEBOOK_PAGE_ID"))
@@ -114,14 +122,14 @@ def buildFacebookCaption(article):
     title = _clean(_article_value(article, "title")) or "Cập nhật tin tức mới"
     summary = (
         _clean(_article_value(article, "summary"))
-        or "Bản tin được hệ thống PNews tổng hợp tự động từ các nguồn tin đáng tin cậy."
+        or "Bản tin đang được cập nhật từ các nguồn tin đáng tin cậy."
     )
     source = _clean(_article_value(article, "source")) or "PNews"
     url = _clean(_article_value(article, "url"))
-    published_at = formatArticlePublishedAt(article)
 
     parts = [
-        "📌 TIN MỚI TỪ PNEWS",
+        "TIN TỨC MỚI TỪ PNEWS",
+        f"Cập nhật ngày {formatFacebookPostUpdatedAt()}",
         "",
         title,
         "",
@@ -129,14 +137,10 @@ def buildFacebookCaption(article):
         "",
         f"Nguồn: {source}",
     ]
-    if published_at:
-        parts.append(f"Ngày/giờ bài báo: {published_at}")
     if url:
         parts.append(f"🔗 Xem chi tiết: {url}")
     parts.extend(
         [
-            "",
-            "PNews tự động tổng hợp và chọn lọc các tin tức nổi bật về giáo dục, khoa học, công nghệ và hoạt động PTIT.",
             "",
             "#PNews #PTIT #TinTucCongNghe #GiaoDuc #KhoaHocCongNghe",
         ]
@@ -354,6 +358,7 @@ def getPostInfo(post_id):
 
 
 build_facebook_caption = buildFacebookCaption
+format_facebook_post_updated_at = formatFacebookPostUpdatedAt
 format_article_published_at = formatArticlePublishedAt
 publish_link_post = publishLinkPost
 publish_multi_photo_post = publishMultiPhotoPost

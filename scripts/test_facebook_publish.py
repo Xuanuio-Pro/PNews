@@ -1,6 +1,7 @@
 ﻿import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 
@@ -16,14 +17,13 @@ from services.facebook_service import (  # noqa: E402
 )
 
 
-TEST_MESSAGE = """📌 TEST ĐĂNG BÀI TỪ PNEWS
+TEST_MESSAGE = f"""TEST ĐĂNG BÀI TỪ PNEWS
+Cập nhật ngày {datetime.now().strftime('%d/%m/%Y %H:%M')}
 
 Đây là bài kiểm tra kết nối Facebook Graph API từ hệ thống PNews.
 
 Nguồn: PNews
 🔗 Xem chi tiết: https://p-tech.xyz
-
-PNews tự động tổng hợp và chọn lọc các tin tức nổi bật về giáo dục, khoa học, công nghệ và hoạt động PTIT.
 
 #PNews #PTIT #TinTucCongNghe"""
 

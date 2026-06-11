@@ -9,8 +9,8 @@ Chay cac lenh sau trong thu muc du an:
 ```powershell
 git status --short
 git diff
-python -m py_compile main.py web_app.py services/image_generator.py services/storage.py services/notification_service.py
-python -m py_compile scripts/sync_cms_from_csv.py
+python -m py_compile main.py web_app.py services/facebook_service.py services/image_generator.py services/storage.py services/notification_service.py
+python -m py_compile scripts/sync_cms_from_csv.py scripts/test_facebook_publish.py
 python scripts/test_generate_news_cards.py
 ```
 

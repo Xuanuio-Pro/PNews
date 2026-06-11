@@ -28,7 +28,7 @@ from services.facebook_service import (
     FacebookConfigError,
     FacebookPublishError,
     buildFacebookCaption,
-    formatArticlePublishedAt,
+    formatFacebookPostUpdatedAt,
     getPostInfo,
     publishMultiPhotoPost,
     publishPhotoPost,
@@ -97,7 +97,8 @@ ADMIN_ACCOUNTS = load_admin_accounts()
 SESSION_COOKIE = "pnews_cms_session"
 SESSIONS = set()
 CLIENT_PAGE_SIZE = 12
-ADMIN_PAGE_SIZE = 10
+ADMIN_PAGE_SIZE = 12
+CLIENT_ORDER_UNSET_SORT = 2_147_483_647
 CLIENT_TOPIC_ORDER = [
     "Tin tức chung",
     "Tin tức PTIT",
@@ -198,6 +199,7 @@ def init_db():
                 generated_poster_image TEXT DEFAULT '',
                 approval_status TEXT NOT NULL DEFAULT 'pending',
                 status TEXT NOT NULL DEFAULT 'pending',
+                client_order INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 approved_at TEXT DEFAULT '',
@@ -224,6 +226,7 @@ def init_db():
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_articles_status_published ON articles(status, published_at)"
         )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_client_order ON articles(status, client_order)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_articles_url ON articles(url) WHERE url != ''")
         conn.commit()
     init_chat_logs()
@@ -244,6 +247,7 @@ def ensure_article_schema(conn):
         "facebook_publish_error": "ALTER TABLE articles ADD COLUMN facebook_publish_error TEXT DEFAULT ''",
         "facebook_caption": "ALTER TABLE articles ADD COLUMN facebook_caption TEXT DEFAULT ''",
         "generated_poster_image": "ALTER TABLE articles ADD COLUMN generated_poster_image TEXT DEFAULT ''",
+        "client_order": "ALTER TABLE articles ADD COLUMN client_order INTEGER DEFAULT 0",
     }
 
     for column, sql in migrations.items():
@@ -520,29 +524,28 @@ def resolve_article_facebook_image(article):
 
 def build_facebook_bulk_caption(articles):
     valid_articles = [article for article in articles or [] if article]
-    parts = ["📌 TIN MỚI TỪ PNEWS", ""]
+    parts = [
+        "TIN TỨC MỚI TỪ PNEWS",
+        f"Cập nhật ngày {formatFacebookPostUpdatedAt()}",
+        "",
+    ]
 
     for index, article in enumerate(valid_articles, start=1):
         title = str(article.get("title") or "Cập nhật tin tức mới").strip()
         summary = str(article.get("summary") or "").strip()
         source = str(article.get("source") or "PNews").strip()
         url = str(article.get("url") or "").strip()
-        published_at = formatArticlePublishedAt(article)
 
         parts.append(f"{index}. {title}")
         if summary:
             parts.append(summary)
         parts.append(f"Nguồn: {source}")
-        if published_at:
-            parts.append(f"Ngày/giờ bài báo: {published_at}")
         if url:
             parts.append(f"🔗 Xem chi tiết: {url}")
         parts.append("")
 
     parts.extend(
         [
-            "PNews tự động tổng hợp và chọn lọc các tin tức nổi bật về giáo dục, khoa học, công nghệ và hoạt động PTIT.",
-            "",
             "#PNews #PTIT #TinTucCongNghe #GiaoDuc #KhoaHocCongNghe",
         ]
     )
@@ -733,6 +736,24 @@ def article_date_sql_expr(status=None):
     return "COALESCE(NULLIF(published_at, ''), NULLIF(crawled_at, ''), created_at)"
 
 
+def approved_article_order_sql():
+    date_expr = article_date_sql_expr("approved")
+    return f"""
+          CASE WHEN COALESCE(client_order, 0) > 0 THEN 0 ELSE 1 END ASC,
+          CASE WHEN COALESCE(client_order, 0) > 0 THEN client_order ELSE {CLIENT_ORDER_UNSET_SORT} END ASC,
+          date({date_expr}) DESC,
+          datetime({date_expr}) DESC,
+          CASE
+            WHEN lower(COALESCE(source, '')) LIKE '%ptit%' THEN 0
+            WHEN lower(COALESCE(source, '')) LIKE '%buu chinh%' THEN 0
+            WHEN lower(COALESCE(source, '')) LIKE '%bưu chính%' THEN 0
+            ELSE 1
+          END ASC,
+          NULLIF(published_at, '') DESC,
+          id DESC
+    """
+
+
 def article_filter_where(status=None, q=None, topic=None, source=None, date_filter=None, canonical_topic=False):
     where = []
     params = {}
@@ -784,19 +805,7 @@ def query_articles(status=None, q=None, topic=None, source=None, date_filter=Non
     if where:
         sql += " WHERE " + " AND ".join(where)
     if status == "approved":
-        sql += """
-        ORDER BY
-          date(COALESCE(NULLIF(approved_at, ''), NULLIF(reviewed_at, ''), NULLIF(updated_at, ''), NULLIF(published_at, ''), NULLIF(crawled_at, ''), created_at)) DESC,
-          datetime(COALESCE(NULLIF(approved_at, ''), NULLIF(reviewed_at, ''), NULLIF(updated_at, ''), NULLIF(published_at, ''), NULLIF(crawled_at, ''), created_at)) DESC,
-          CASE
-            WHEN lower(COALESCE(source, '')) LIKE '%ptit%' THEN 0
-            WHEN lower(COALESCE(source, '')) LIKE '%buu chinh%' THEN 0
-            WHEN lower(COALESCE(source, '')) LIKE '%bưu chính%' THEN 0
-            ELSE 1
-          END ASC,
-          NULLIF(published_at, '') DESC,
-          id DESC
-        """
+        sql += f" ORDER BY {approved_article_order_sql()}"
     else:
         sql += """
         ORDER BY
@@ -920,6 +929,108 @@ def set_articles_status(article_ids, status):
         rowcount = cursor.rowcount
 
     return rowcount
+
+
+def parse_client_order_value(value):
+    return max(0, int(str(value or "").strip() or 0))
+
+
+def article_client_order(article):
+    try:
+        if isinstance(article, sqlite3.Row):
+            value = article["client_order"] if "client_order" in article.keys() else 0
+        else:
+            value = (article or {}).get("client_order", 0)
+        return parse_client_order_value(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def update_article_content(article_id, fields, file_part=None):
+    title = str(fields.get("title", "")).strip()
+    if not title:
+        raise ValueError("Cần nhập tiêu đề bài viết.")
+
+    try:
+        client_order = parse_client_order_value(fields.get("client_order"))
+    except ValueError as exc:
+        raise ValueError("Thứ tự client phải là số nguyên không âm.") from exc
+
+    updates = {
+        "source": str(fields.get("source", "")).strip() or "PNews",
+        "title": title,
+        "url": str(fields.get("url", "")).strip(),
+        "published_at": str(fields.get("published_at", "")).strip(),
+        "summary": str(fields.get("summary", "")).strip(),
+        "content_topic": str(fields.get("content_topic", "")).strip(),
+        "category": str(fields.get("category", "")).strip(),
+        "client_order": client_order,
+    }
+
+    if file_part and file_part.get("content"):
+        image_path = save_uploaded_file(file_part, title)
+        updates["image_path"] = image_path
+        updates["generated_poster_image"] = image_path
+
+    updates["updated_at"] = now_iso()
+    assignments = [f"{key} = :{key}" for key in updates]
+    params = {**updates, "id": int(article_id)}
+
+    with connect_db() as conn:
+        article = conn.execute(
+            "SELECT id, COALESCE(facebook_posted, 0) AS facebook_posted FROM articles WHERE id = ?",
+            (int(article_id),),
+        ).fetchone()
+        if not article:
+            return False
+        if int(article["facebook_posted"] or 0) != 1:
+            assignments.append("facebook_caption = ''")
+        conn.execute(
+            f"UPDATE articles SET {', '.join(assignments)} WHERE id = :id",
+            params,
+        )
+        conn.commit()
+    return True
+
+
+def move_article_client_order(article_id, direction):
+    clean_direction = str(direction or "").strip().lower()
+    if clean_direction not in {"up", "down"}:
+        return False, "Hướng sắp xếp không hợp lệ."
+
+    with connect_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id
+            FROM articles
+            WHERE status = 'approved'
+            ORDER BY {approved_article_order_sql()}
+            """
+        ).fetchall()
+        ordered_ids = [int(row["id"]) for row in rows]
+        clean_id = int(article_id)
+        if clean_id not in ordered_ids:
+            return False, "Chỉ có thể sắp xếp bài đã duyệt trên client."
+
+        current_index = ordered_ids.index(clean_id)
+        target_index = current_index - 1 if clean_direction == "up" else current_index + 1
+        if target_index < 0:
+            return False, "Bài này đã ở đầu danh sách client."
+        if target_index >= len(ordered_ids):
+            return False, "Bài này đã ở cuối danh sách client."
+
+        ordered_ids[current_index], ordered_ids[target_index] = ordered_ids[target_index], ordered_ids[current_index]
+        timestamp = now_iso()
+        conn.executemany(
+            "UPDATE articles SET client_order = ?, updated_at = ? WHERE id = ?",
+            [
+                (index + 1, timestamp, ordered_article_id)
+                for index, ordered_article_id in enumerate(ordered_ids)
+            ],
+        )
+        conn.commit()
+
+    return True, "Đã cập nhật thứ tự hiển thị trên client."
 
 
 def article_to_dict(article):
@@ -2977,12 +3088,31 @@ def render_facebook_publish_actions(article):
     return "".join(actions)
 
 
+def render_client_config_actions(article):
+    data = article_to_dict(article)
+    if data.get("status") != "approved":
+        return ""
+    article_id = int(data["id"])
+    return "".join(
+        [
+            f'<a class="button ghost" href="/admin/articles/{article_id}/edit">Chỉnh sửa</a>',
+            f'<button class="button ghost" type="submit" name="direction" value="up" formaction="/admin/articles/{article_id}/move-client">Lên</button>',
+            f'<button class="button ghost" type="submit" name="direction" value="down" formaction="/admin/articles/{article_id}/move-client">Xuống</button>',
+        ]
+    )
+
+
 def render_facebook_preview(article):
     data = article_to_dict(article)
     if data.get("status") != "approved":
         return ""
 
-    caption = data.get("facebook_caption") or buildFacebookCaption(data)
+    facebook_status = article_facebook_status(data)
+    caption = (
+        data.get("facebook_caption")
+        if facebook_status == "success" and data.get("facebook_caption")
+        else buildFacebookCaption(data)
+    )
     image_url = article_image_url(article)
     image = (
         f'<img src="{escape(image_url)}" alt="{escape(data.get("title"))}" loading="lazy">'
@@ -3036,10 +3166,17 @@ def render_admin_article(article):
     facebook_badge = render_facebook_status_badge(article) if article["status"] == "approved" else ""
     facebook_actions = render_facebook_publish_actions(article) if article["status"] == "approved" else ""
     facebook_preview = render_facebook_preview(article)
+    client_config_actions = render_client_config_actions(article) if article["status"] == "approved" else ""
+    client_order = article_client_order(article)
+    client_order_badge = (
+        f'<span class="badge client-order-badge">Client: #{client_order}</span>'
+        if article["status"] == "approved" and client_order > 0
+        else ""
+    )
 
     actions = {
         "pending": approve + reject + delete,
-        "approved": facebook_actions + export_png + reject + delete,
+        "approved": facebook_actions + export_png + client_config_actions + reject + delete,
         "rejected": approve + delete,
         "deleted": restore,
     }.get(article["status"], approve + delete)
@@ -3067,6 +3204,7 @@ def render_admin_article(article):
           <span>{escape(article['source'] or 'Admin')}</span>
           <span>{escape(topic_label or 'Chưa phân loại')}</span>
           <span class="badge">{escape(STATUS_LABELS.get(article['status'], article['status']))}</span>
+          {client_order_badge}
           {facebook_badge}
         </div>
         <div class="review-click-zone" {click_attrs}>
@@ -3110,6 +3248,58 @@ def auto_send_telegram_notice_background(article_ids):
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
     return "Telegram tự động: đang gửi nền."
+
+
+def render_article_edit_form(article_id, error="", success=""):
+    article = get_article(article_id)
+    if not article:
+        return render_not_found()
+
+    error_html = f'<p class="form-error">{escape(error)}</p>' if error else ""
+    success_html = f'<p class="form-success">{escape(success)}</p>' if success else ""
+    image_url = article_image_url(article)
+    image_preview = (
+        f'<a class="edit-image-preview" href="{escape(image_url)}" target="_blank" rel="noopener">'
+        f'<img src="{escape(image_url)}" alt="{escape(article["title"])}" loading="lazy"></a>'
+        if image_url
+        else ""
+    )
+    client_order = article_client_order(article)
+
+    body = f"""
+    <section class="admin-head">
+      <div>
+        <p class="eyebrow">Client</p>
+        <h1>Chỉnh sửa bài viết</h1>
+        <p>Cập nhật nội dung hiển thị trên client và caption Facebook kế tiếp.</p>
+      </div>
+      <div class="admin-actions">
+        <a class="button ghost" href="/admin?status={escape(article['status'])}">Về danh sách</a>
+        <a class="button ghost" href="/client" target="_blank" rel="noopener">Xem client</a>
+      </div>
+    </section>
+    <form class="upload-form edit-form" method="post" action="/admin/articles/{int(article['id'])}/edit" enctype="multipart/form-data">
+      {error_html}
+      {success_html}
+      {image_preview}
+      <label>Tiêu đề<input name="title" required value="{escape(article['title'])}"></label>
+      <label>Tóm tắt<textarea name="summary" rows="5">{escape(article['summary'])}</textarea></label>
+      <div class="form-grid">
+        <label>Nguồn<input name="source" value="{escape(article['source'])}"></label>
+        <label>Chủ đề<input name="content_topic" value="{escape(article['content_topic'])}"></label>
+        <label>Chuyên mục<input name="category" value="{escape(article['category'])}"></label>
+        <label>Link bài gốc<input name="url" type="url" value="{escape(article['url'])}"></label>
+        <label>Ngày đăng<input name="published_at" value="{escape(article['published_at'])}"></label>
+        <label>Thứ tự client<input name="client_order" type="number" min="0" step="1" value="{client_order}"></label>
+      </div>
+      <label>Ảnh mới<input name="image" type="file" accept="image/*"></label>
+      <div class="form-actions">
+        <button class="button primary" type="submit">Lưu thay đổi</button>
+        <a class="button ghost" href="/admin?status={escape(article['status'])}">Hủy</a>
+      </div>
+    </form>
+    """
+    return render_admin_page("Chỉnh sửa bài viết", body, active_nav="articles")
 
 
 def render_upload_form(error="", success=""):
@@ -3260,6 +3450,8 @@ class CMSHandler(BaseHTTPRequestHandler):
             self.redirect("/admin/dashboard")
         elif path == "/admin/upload":
             self.require_admin(lambda: self.respond_html(render_upload_form()))
+        elif re.fullmatch(r"/admin/articles/\d+/edit", path):
+            self.require_admin(lambda: self.handle_article_edit_get(path))
         elif re.fullmatch(r"/admin/articles/\d+/export\.png", path):
             self.require_admin(lambda: self.handle_article_export(path))
         elif path == "/api/chat/suggestions":
@@ -3289,6 +3481,10 @@ class CMSHandler(BaseHTTPRequestHandler):
             self.require_admin(lambda: self.handle_facebook_publish_single(path))
         elif re.fullmatch(r"/admin/articles/\d+/clear-facebook", path):
             self.require_admin(lambda: self.handle_facebook_clear_single(path))
+        elif re.fullmatch(r"/admin/articles/\d+/move-client", path):
+            self.require_admin(lambda: self.handle_client_order_move(path))
+        elif re.fullmatch(r"/admin/articles/\d+/edit", path):
+            self.require_admin(lambda: self.handle_article_edit_post(path))
         elif path == "/admin/articles/publish-facebook-bulk":
             self.require_admin(self.handle_facebook_publish_bulk)
         elif path.startswith("/admin/articles/"):
@@ -3511,6 +3707,57 @@ class CMSHandler(BaseHTTPRequestHandler):
                 notice=summarize_facebook_bulk_result(result),
             )
         )
+
+    def handle_article_edit_get(self, path):
+        match = re.fullmatch(r"/admin/articles/(\d+)/edit", path)
+        if not match:
+            self.respond_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+        self.respond_html(render_article_edit_form(int(match.group(1))))
+
+    def handle_article_edit_post(self, path):
+        match = re.fullmatch(r"/admin/articles/(\d+)/edit", path)
+        if not match:
+            self.respond_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+
+        article_id = int(match.group(1))
+        content_type = self.headers.get("Content-Type", "")
+        body = self.read_body()
+        file_part = None
+        if content_type.startswith("multipart/form-data"):
+            fields, files = parse_multipart(body, content_type)
+            file_part = files.get("image")
+        else:
+            fields = parse_form_urlencoded(body)
+
+        try:
+            updated = update_article_content(article_id, fields, file_part)
+        except ValueError as exc:
+            self.respond_html(render_article_edit_form(article_id, error=str(exc)), HTTPStatus.BAD_REQUEST)
+            return
+        except sqlite3.IntegrityError:
+            self.respond_html(
+                render_article_edit_form(article_id, error="Link bài gốc đã tồn tại trong hệ thống."),
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        if not updated:
+            self.respond_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+        self.respond_html(render_article_edit_form(article_id, success="Đã lưu thay đổi bài viết."))
+
+    def handle_client_order_move(self, path):
+        match = re.fullmatch(r"/admin/articles/(\d+)/move-client", path)
+        if not match:
+            self.respond_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+
+        fields = self.read_form_multi()
+        direction = (fields.get("direction") or [""])[0]
+        _success, notice = move_article_client_order(int(match.group(1)), direction)
+        self.redirect(self.admin_return_url_from_fields(fields, default_status="approved", notice=notice))
 
     def handle_article_action(self, path):
         match = re.fullmatch(r"/admin/articles/(\d+)/(approve|reject|delete|restore)", path)

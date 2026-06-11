@@ -271,8 +271,10 @@ Mo:
 Trang admin:
 
 - `/admin/dashboard`: xem tong quan.
-- `/admin`: duyet, tu choi, xoa va go khoi client.
+- `/admin`: duyet, tu choi, xoa, go khoi client; moi trang hien 12 bai.
 - `/admin/upload`: tai an pham/bai viet thu cong.
+- Bai da duyet co the `Chinh sua`, sap xep `Len`/`Xuong` tren client va export PNG.
+- Xem them `docs/ADMIN_CONTENT_MANAGEMENT.md` de nam luong chinh sua noi dung, thu tu client va caption Facebook.
 
 Trang client:
 
@@ -281,6 +283,12 @@ Trang client:
 - `Tin tuc PTIT`: chi cac bai nguon PTIT.
 - Bo loc ngay mac dinh la ngay hom nay; dung `Tat ca ngay` de xem toan bo bai da duyet.
 - O chon ngay co gioi han toi da la ngay hien tai.
+- Neu admin da sap xep thu cong, client uu tien `client_order`; cac bai con lai tiep tuc theo thu tu moi nhat.
+
+Facebook:
+
+- Caption dung mot moc `Cap nhat ngay ...` cho ca post.
+- Khong hien ngay/gio rieng tung bai va khong them footer `PNews tu dong tong hop...`.
 
 ## Don dep runtime output
 
