@@ -64,6 +64,10 @@ LOGO_MARGIN_RIGHT = 26
 LOGO_FONT_SIZE = 48
 LOGO_PADDING_X = 22
 LOGO_PADDING_Y = 12
+PTIT_LOGO_IMAGE = "ptit-logo.jpg"
+PTIT_LOGO_MARGIN_LEFT = 26
+PTIT_LOGO_MARGIN_TOP = 24
+PTIT_LOGO_SIZE = 136
 
 DEFAULT_PLACEHOLDER_IMAGE = "PNews.png"
 THUMBNAIL_CACHE_DIR = DATA_DIR / "thumbnails"
@@ -392,9 +396,32 @@ def _render_news_card_image(article, brand_name):
         fill=CONTENT_BG + (255,),
     )
 
+    _draw_ptit_logo(canvas)
     _draw_logo(canvas, brand_name or LOGO_TEXT)
     _draw_content(draw, article)
     return canvas, used_fallback, thumbnail_source
+
+
+def _draw_ptit_logo(canvas):
+    logo = _load_ptit_logo()
+    if logo is None:
+        LOGGER.warning("Khong tim thay logo PTIT tai %s.", BASE_DIR / PTIT_LOGO_IMAGE)
+        return
+
+    logo = ImageOps.exif_transpose(logo).convert("RGBA")
+    logo = logo.resize((PTIT_LOGO_SIZE, PTIT_LOGO_SIZE), Image.Resampling.LANCZOS)
+    canvas.alpha_composite(logo, (PTIT_LOGO_MARGIN_LEFT, PTIT_LOGO_MARGIN_TOP))
+
+
+def _load_ptit_logo():
+    logo_path = BASE_DIR / PTIT_LOGO_IMAGE
+    if not logo_path.exists() or not logo_path.is_file():
+        return None
+    try:
+        return Image.open(logo_path)
+    except Exception as exc:
+        LOGGER.warning("Khong mo duoc logo PTIT '%s': %s", logo_path, exc)
+        return None
 
 
 def _draw_logo(canvas, brand_text):

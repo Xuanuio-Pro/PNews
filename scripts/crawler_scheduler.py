@@ -23,10 +23,10 @@ STALE_LOCK_SECONDS = int(os.getenv("PNEWS_CRAWLER_LOCK_STALE_SECONDS", "1800"))
 SCHEDULE_TIME = os.getenv("PNEWS_CRAWLER_SCHEDULE_TIME", "07:00")
 RETRY_SECONDS = int(os.getenv("PNEWS_CRAWLER_RETRY_SECONDS", "300"))
 MAX_RETRIES = int(os.getenv("PNEWS_CRAWLER_MAX_RETRIES", "288"))
-RUN_ON_START = os.getenv("PNEWS_CRAWLER_RUN_ON_START", "true").lower() not in {
-    "0",
-    "false",
-    "no",
+RUN_ON_START = os.getenv("PNEWS_CRAWLER_RUN_ON_START", "false").lower() in {
+    "1",
+    "true",
+    "yes",
 }
 
 
