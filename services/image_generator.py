@@ -64,7 +64,7 @@ LOGO_MARGIN_RIGHT = 26
 LOGO_FONT_SIZE = 48
 LOGO_PADDING_X = 22
 LOGO_PADDING_Y = 12
-PTIT_LOGO_IMAGE = "ptit-logo.jpg"
+PTIT_LOGO_IMAGE = "Logo PTIT.png"
 PTIT_LOGO_MARGIN_LEFT = 26
 PTIT_LOGO_MARGIN_TOP = 24
 PTIT_LOGO_SIZE = 136
@@ -409,8 +409,13 @@ def _draw_ptit_logo(canvas):
         return
 
     logo = ImageOps.exif_transpose(logo).convert("RGBA")
-    logo = logo.resize((PTIT_LOGO_SIZE, PTIT_LOGO_SIZE), Image.Resampling.LANCZOS)
-    canvas.alpha_composite(logo, (PTIT_LOGO_MARGIN_LEFT, PTIT_LOGO_MARGIN_TOP))
+    logo.thumbnail((PTIT_LOGO_SIZE, PTIT_LOGO_SIZE), Image.Resampling.LANCZOS)
+
+    slot = Image.new("RGBA", (PTIT_LOGO_SIZE, PTIT_LOGO_SIZE), (0, 0, 0, 0))
+    offset_x = (PTIT_LOGO_SIZE - logo.width) // 2
+    offset_y = (PTIT_LOGO_SIZE - logo.height) // 2
+    slot.alpha_composite(logo, (offset_x, offset_y))
+    canvas.alpha_composite(slot, (PTIT_LOGO_MARGIN_LEFT, PTIT_LOGO_MARGIN_TOP))
 
 
 def _load_ptit_logo():

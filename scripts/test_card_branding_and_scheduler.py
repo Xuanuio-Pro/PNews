@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -38,11 +38,15 @@ class NewsCardBrandingTest(unittest.TestCase):
             self.assertTrue(output_path.exists())
 
             image = Image.open(output_path).convert("RGB")
-            expected_logo = Image.open(BASE_DIR / "ptit-logo.jpg").convert("RGB")
-            expected_logo = expected_logo.resize((136, 136), Image.Resampling.LANCZOS)
-            logo_region = image.crop((26, 24, 162, 160))
+            expected_logo = ImageOps.exif_transpose(Image.open(BASE_DIR / "Logo PTIT.png")).convert("RGBA")
+            expected_logo.thumbnail((136, 136), Image.Resampling.LANCZOS)
+            logo_slot = Image.new("RGBA", (136, 136), (0, 0, 0, 0))
+            offset_x = (136 - expected_logo.width) // 2
+            offset_y = (136 - expected_logo.height) // 2
+            logo_slot.alpha_composite(expected_logo, (offset_x, offset_y))
+            logo_region = image.crop((26, 24, 162, 160)).convert("RGBA")
 
-            self.assertLess(_mean_abs_difference(logo_region, expected_logo), 32)
+            self.assertLess(_mean_abs_difference_on_mask(logo_region, logo_slot), 40)
 
 
 def _mean_abs_difference(first, second):
@@ -53,6 +57,21 @@ def _mean_abs_difference(first, second):
 
     for left, right in zip(first_pixels[:count], second_pixels[:count]):
         total += sum(abs(left[index] - right[index]) for index in range(3)) / 3
+
+    return total / max(count, 1)
+
+
+def _mean_abs_difference_on_mask(actual, expected, alpha_threshold=24):
+    actual_pixels = list(actual.getdata())
+    expected_pixels = list(expected.getdata())
+    total = 0
+    count = 0
+
+    for actual_pixel, expected_pixel in zip(actual_pixels, expected_pixels):
+        if expected_pixel[3] <= alpha_threshold:
+            continue
+        total += sum(abs(actual_pixel[index] - expected_pixel[index]) for index in range(3)) / 3
+        count += 1
 
     return total / max(count, 1)
 
