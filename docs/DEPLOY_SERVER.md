@@ -188,6 +188,34 @@ git pull
 docker compose up -d --build pnews-web
 ```
 
+Nếu cần cập nhật code mới và tạo lại ảnh ấn phẩm của ngày hiện tại ngay trên server, dùng:
+
+```bash
+cd /opt/pnews
+chmod +x ./scripts/rerun_today_cards.sh
+./scripts/rerun_today_cards.sh
+```
+
+Hoặc chạy cho một ngày cụ thể:
+
+```bash
+./scripts/rerun_today_cards.sh 2026-06-16
+```
+
+Nếu cần thay logo mới cho toàn bộ bài viết đang có trên web:
+
+```bash
+cd /opt/pnews
+chmod +x ./scripts/rerun_all_cards.sh
+./scripts/rerun_all_cards.sh
+```
+
+Mặc định script regenerate cho nhóm bài `approved`. Có thể đổi thành:
+
+```bash
+./scripts/rerun_all_cards.sh all
+```
+
 ---
 
 ## 10. Rollback cơ bản khi gặp sự cố cập nhật

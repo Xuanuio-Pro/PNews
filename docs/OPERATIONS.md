@@ -55,9 +55,56 @@ Hoặc chạy thông qua shell script vận hành (có cơ chế chống chạy 
 ./scripts/run_crawler_server.sh
 ```
 
+### Tạo lại ấn phẩm của hôm nay sau khi lỡ chạy code cũ
+Khi server chưa `git pull` kịp nên ảnh ấn phẩm trong ngày được tạo bằng phiên bản cũ, dùng script sau để cập nhật code, build lại container, regenerate ảnh đúng thư mục ngày hiện tại và giữ scheduler dùng code mới cho các ngày sau:
+```bash
+chmod +x ./scripts/rerun_today_cards.sh
+./scripts/rerun_today_cards.sh
+```
+
+Muốn tạo lại cho một ngày cụ thể, truyền ngày theo định dạng `YYYY-MM-DD`:
+```bash
+./scripts/rerun_today_cards.sh 2026-06-16
+```
+
+Script sẽ tự:
+- `git pull --ff-only`
+- `docker compose build` cho `pnews-web`, `pnews-crawler`, `pnews-scheduler`
+- khởi động lại `pnews-web` và `pnews-scheduler`
+- backup thư mục `data/generated_images/<ngày>`
+- enrich lại CSV của ngày đó nếu cần
+- tạo lại toàn bộ ảnh vào đúng thư mục ngày
+- sync lại CMS và kiểm tra `http://localhost:8000/health`
+
+### Tạo lại toàn bộ ảnh bài viết với logo mới
+Nếu muốn đổi logo mới cho toàn bộ bài đã duyệt trên web mà vẫn giữ link ảnh cũ ổn định, dùng:
+```bash
+chmod +x ./scripts/rerun_all_cards.sh
+./scripts/rerun_all_cards.sh
+```
+
+Mặc định script chạy cho `approved`. Có thể truyền trạng thái khác:
+```bash
+./scripts/rerun_all_cards.sh all
+./scripts/rerun_all_cards.sh pending
+```
+
+Script sẽ tự:
+- `git pull --ff-only`
+- build lại `pnews-web`, `pnews-crawler`, `pnews-scheduler`
+- backup toàn bộ `data/generated_images/`
+- regenerate lại ảnh từ dữ liệu SQLite và ghi đè đúng path ảnh cũ nếu đó là ảnh sinh tự động
+- restart web và kiểm tra healthcheck
+
+Lưu ý:
+- Mặc định script bỏ qua ảnh upload tay trong `data/uploads/` để không ghi đè nhầm ảnh do admin tải lên.
+- Nếu cần thay cả các record đang trỏ tới ảnh upload, hãy chạy trực tiếp Python script với cờ `--include-uploads` sau khi đã backup kỹ.
+
 ### Kiểm tra log chạy của Crawler
 - **Nhật ký tiến trình chi tiết**: `logs/crawler.log`
 - **Nhật ký kích hoạt tự động từ Cron**: `logs/cron_crawler.log`
+- **Nhật ký chạy lại ấn phẩm theo ngày**: `logs/rerun_today_cards.log`
+- **Nhật ký chạy lại toàn bộ ấn phẩm**: `logs/rerun_all_cards.log`
 
 ---
 
