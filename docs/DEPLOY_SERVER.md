@@ -202,6 +202,8 @@ Hoặc chạy cho một ngày cụ thể:
 ./scripts/rerun_today_cards.sh 2026-06-16
 ```
 
+Script này cũng cập nhật lại đường dẫn ảnh trong SQLite cho đúng ngày được rerun, nên web sẽ dùng đồng loạt ảnh mới thay vì tiếp tục tham chiếu một phần sang ảnh cũ.
+
 Nếu cần thay logo mới cho toàn bộ bài viết đang có trên web:
 
 ```bash

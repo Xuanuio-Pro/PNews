@@ -74,6 +74,7 @@ Script sẽ tự:
 - backup thư mục `data/generated_images/<ngày>`
 - enrich lại CSV của ngày đó nếu cần
 - tạo lại toàn bộ ảnh vào đúng thư mục ngày
+- cập nhật DB để các bài đúng ngày đó dùng path ảnh mới trên web
 - sync lại CMS và kiểm tra `http://localhost:8000/health`
 
 ### Tạo lại toàn bộ ảnh bài viết với logo mới

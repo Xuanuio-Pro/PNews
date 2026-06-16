@@ -107,6 +107,12 @@ run_step "regenerate news cards" \
     --limit 0 \
     --clean
 
+run_step "update DB image paths for rerun date" \
+    docker compose --profile manual run --rm pnews-crawler \
+    python -X utf8 scripts/regenerate_all_cards.py \
+    --status all \
+    --date "$DATE_TO_RERUN"
+
 run_step "sync CMS from CSV" \
     docker compose --profile manual run --rm pnews-crawler \
     python -X utf8 scripts/sync_cms_from_csv.py

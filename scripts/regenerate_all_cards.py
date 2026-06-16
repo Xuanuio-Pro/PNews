@@ -40,6 +40,11 @@ def parse_args():
         default=0,
         help="Maximum number of articles to process. Use 0 for all.",
     )
+    parser.add_argument(
+        "--date",
+        default="",
+        help="Only process articles whose derived date folder matches YYYY-MM-DD.",
+    )
     return parser.parse_args()
 
 
@@ -117,6 +122,13 @@ def fetch_articles(conn, status, limit):
     return conn.execute(sql, params).fetchall()
 
 
+def filter_rows_by_date(rows, target_date):
+    value = str(target_date or "").strip()
+    if not value:
+        return list(rows)
+    return [row for row in rows if derive_date_folder(dict(row)) == value]
+
+
 def regenerate_article(article, include_uploads=False):
     article_dict = dict(article)
     current_relative = pick_target_relative_path(article_dict, include_uploads=include_uploads)
@@ -162,6 +174,7 @@ def main():
 
     with connect_db() as conn:
         rows = fetch_articles(conn, status=status, limit=args.limit)
+        rows = filter_rows_by_date(rows, args.date)
         LOGGER.info("Found %s article(s) to inspect.", len(rows))
 
         for row in rows:
