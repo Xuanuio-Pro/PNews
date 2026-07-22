@@ -30,6 +30,10 @@ def parse_args():
 
 
 def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8")
     args = parse_args()
     if len(args.image) != 2:
         print("Cần truyền đúng hai tham số --image.", file=sys.stderr)
@@ -76,11 +80,20 @@ def main():
         min_photos=2,
         concurrency=1,
     )
-    print(json.dumps(publication.to_dict(), ensure_ascii=False, indent=2))
-    print(json.dumps(response, ensure_ascii=False, indent=2))
+    safe_print(json.dumps(publication.to_dict(), ensure_ascii=False, indent=2))
+    safe_print(json.dumps(response, ensure_ascii=False, indent=2))
     if not args.dry_run:
         print("Hãy mở post và từng ảnh để xác nhận TEST_PHOTO_A/B được giữ riêng biệt.")
     return 0
+
+
+def safe_print(value):
+    text = str(value)
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or "utf-8"
+        print(text.encode(encoding, errors="replace").decode(encoding))
 
 
 if __name__ == "__main__":
