@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import sqlite3
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -259,11 +260,12 @@ class PersistenceMigrationTests(unittest.TestCase):
     def test_additive_schema_keeps_existing_articles(self):
         with tempfile.TemporaryDirectory() as folder:
             database = Path(folder) / "existing.sqlite3"
-            with sqlite3.connect(database) as conn:
+            with closing(sqlite3.connect(database)) as conn:
                 conn.execute("CREATE TABLE articles (id INTEGER PRIMARY KEY, title TEXT)")
                 conn.execute("INSERT INTO articles (id, title) VALUES (1, 'Bài cũ')")
+                conn.commit()
             FacebookPublicationRepository(database)
-            with sqlite3.connect(database) as conn:
+            with closing(sqlite3.connect(database)) as conn:
                 title = conn.execute("SELECT title FROM articles WHERE id = 1").fetchone()[0]
                 tables = {
                     row[0]
