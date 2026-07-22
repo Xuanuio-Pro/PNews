@@ -124,6 +124,10 @@ Hanh vi dang Facebook:
 - Caption chi co mot dong `Cap nhat ngay ...` cho ca post, khong hien ngay/gio rieng tung bai.
 - Caption khong them footer `PNews tu dong tong hop...`.
 - Preview Facebook cua bai chua dang luon sinh caption moi tu noi dung hien tai; bai da dang thanh cong giu caption lich su.
+- Dang nhieu bai upload tung anh voi `published=false` va caption rieng, sau do tao mot feed post bang `attached_media`.
+- Caption feed post duoc rut gon; title/summary/source/URL nam trong caption cua tung anh.
+- Trang admin co `Xem truoc Facebook`, cho sua caption, bo anh khoi batch va chay dry-run.
+- Chi tiet bien moi truong, test hai anh va reconcile publication nam trong `README.md`.
 
 Test ket noi Graph API:
 

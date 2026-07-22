@@ -67,6 +67,20 @@ Khi bai chua dang Facebook thanh cong, viec sua noi dung se xoa caption Facebook
 
 ## Chuan caption Facebook
 
+Voi bai nhieu anh, caption bai chinh chi gom ten ban tin, thoi gian cap nhat,
+mot doan gioi thieu ngan va huong dan bam vao tung anh. Moi anh co caption rieng
+gom so thu tu, tieu de, summary toi da 400 ky tu, nguon va URL.
+
+Tai danh sach bai da duyet:
+
+1. Chon it nhat hai bai.
+2. Bam `Xem truoc Facebook`.
+3. Kiem tra thu tu anh va caption; bo chon neu muon loai anh khoi batch.
+4. Sua caption truc tiep hoac bam `Sua noi dung bai goc`.
+5. Chay `Dang thu (dry-run)` truoc khi dang that.
+
+Dry-run ghi JSON tai `data/facebook_previews/` va khong goi Graph API.
+
 Caption moi chi co mot moc thoi gian cho ca bai dang:
 
 ```text

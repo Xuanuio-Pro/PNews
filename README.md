@@ -289,6 +289,108 @@ Trang client:
 Facebook:
 
 - Caption dung mot moc `Cap nhat ngay ...` cho ca post.
+
+## Facebook multi-photo publication
+
+Luồng bulk Facebook dùng Graph API, không dùng browser automation:
+
+1. Tạo một publication có idempotency key dạng
+   `facebook-publication:{pageId}:{publicationDate}:{batchId}`.
+2. Upload từng ảnh qua `/{page-id}/photos` với `published=false` và caption riêng
+   trong trường `message`.
+3. Lưu photo ID ngay sau mỗi upload thành công.
+4. Tạo đúng một bài qua `/{page-id}/feed`; caption ngắn nằm trong `message` và
+   danh sách photo ID nằm trong `attached_media` theo đúng thứ tự.
+
+Caption bài chính chỉ chứa tên bản tin, thời gian cập nhật, giới thiệu ngắn và
+hướng dẫn bấm vào từng ảnh. Caption riêng của mỗi ảnh chứa tiêu đề, summary tối
+đa 400 ký tự, nguồn và URL bài gốc.
+
+### Meta App và Page Access Token
+
+Tạo app trong Meta for Developers, kết nối app với tài khoản có quyền quản trị
+Page và cấp các quyền Page cần thiết. Luồng hiện tại cần tối thiểu
+`pages_manage_posts` và `pages_read_engagement`; `pages_show_list` được dùng khi
+lấy danh sách Page/token. Với môi trường production, app và quyền phải hoàn tất
+quy trình review/Business verification theo yêu cầu hiển thị trong Meta App.
+
+Không ghi token vào source hoặc commit `.env`. Cấu hình:
+
+```dotenv
+FACEBOOK_PAGE_ID=
+FACEBOOK_PAGE_ACCESS_TOKEN=
+FACEBOOK_GRAPH_API_VERSION=v25.0
+FACEBOOK_API_TIMEOUT_MS=30000
+FACEBOOK_MAX_RETRIES=3
+FACEBOOK_UPLOAD_CONCURRENCY=3
+FACEBOOK_PARTIAL_POST_POLICY=abort
+FACEBOOK_MIN_PHOTOS_TO_PUBLISH=3
+FACEBOOK_DRY_RUN=false
+```
+
+`FACEBOOK_PARTIAL_POST_POLICY`:
+
+- `abort`: không tạo feed post nếu bất kỳ ảnh nào upload thất bại.
+- `skip_failed`: bỏ ảnh lỗi; chỉ đăng nếu số ảnh thành công đạt
+  `FACEBOOK_MIN_PHOTOS_TO_PUBLISH`.
+
+### Preview và dry-run
+
+Trong trang admin, chọn các bài đã duyệt rồi bấm `Xem trước Facebook`. Màn hình
+preview cho phép sửa caption chính, sửa caption từng ảnh, bỏ ảnh khỏi batch và
+chạy `Đăng thử (dry-run)`.
+
+Có thể bật dry-run toàn hệ thống:
+
+```powershell
+$env:FACEBOOK_DRY_RUN="true"
+python web_app.py
+```
+
+Dry-run không gọi Graph API. JSON gồm publication và payload đã che token được
+ghi vào `data/facebook_previews/`.
+
+### Test
+
+Unit test và integration test với mock HTTP server:
+
+```powershell
+python -m unittest scripts.test_facebook_publication -v
+python -m unittest scripts.test_facebook_api_integration -v
+```
+
+Test thật đúng hai ảnh luôn yêu cầu xác nhận rõ ràng:
+
+```powershell
+python scripts/test_facebook_publish.py --image data/generated_images/a.jpg --image data/generated_images/b.jpg --dry-run
+python scripts/test_facebook_publish.py --image data/generated_images/a.jpg --image data/generated_images/b.jpg --confirm-live
+```
+
+Sau test live, mở bài post rồi bấm lần lượt từng ảnh. Xác minh caption ảnh A có
+marker `TEST_PHOTO_A_*`, ảnh B có `TEST_PHOTO_B_*`, trong khi caption bài chính
+chỉ có `TEST_MAIN_*`.
+
+### Token hết hạn và retry/reconcile
+
+Khi Graph trả lỗi token, thay `FACEBOOK_PAGE_ACCESS_TOKEN` bằng Page token mới,
+khởi động lại web service rồi retry cùng tập article. Publication cũ giữ photo
+ID nên ảnh đã upload thành công không bị upload lại.
+
+Nếu upload/feed trả lỗi chắc chắn, chọn lại cùng tập bài để retry với cùng
+idempotency key. Nếu feed request timeout, hệ thống chuyển publication sang
+`PARTIAL_FAILED` và không tự tạo post mới vì kết quả đang không xác định. Sau
+khi kiểm tra trực tiếp trên Facebook:
+
+```powershell
+# Facebook đã tạo post
+python scripts/reconcile_facebook_publication.py --publication-id UUID --facebook-post-id PAGEID_POSTID
+
+# Facebook chắc chắn chưa tạo post
+python scripts/reconcile_facebook_publication.py --publication-id UUID --safe-to-retry
+```
+
+Các bảng `facebook_publications` và `facebook_media_items` lưu trạng thái,
+publication ID, post ID, photo ID và lỗi của từng ảnh.
 - Khong hien ngay/gio rieng tung bai va khong them footer `PNews tu dong tong hop...`.
 
 ## Don dep runtime output
