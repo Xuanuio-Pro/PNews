@@ -28,10 +28,18 @@ from services.facebook_service import (
     FacebookConfigError,
     FacebookPublishError,
     buildFacebookCaption,
-    formatFacebookPostUpdatedAt,
     getPostInfo,
-    publishMultiPhotoPost,
     publishPhotoPost,
+)
+from services.facebook_api_client import FacebookApiClientError
+from services.facebook_captions import (
+    buildFacebookMainCaption,
+    buildFacebookPhotoCaption,
+)
+from services.facebook_models import FacebookPublicationRepository
+from services.facebook_publisher import (
+    FacebookPublicationError,
+    publishFacebookNewsBatch,
 )
 from services.config import get_config_value
 from services.image_generator import generate_news_card
@@ -230,6 +238,7 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_client_order ON articles(status, client_order)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_articles_url ON articles(url) WHERE url != ''")
         conn.commit()
+    FacebookPublicationRepository(DB_PATH)
     init_chat_logs()
     seed_articles_from_csv()
 
@@ -524,33 +533,7 @@ def resolve_article_facebook_image(article):
 
 
 def build_facebook_bulk_caption(articles):
-    valid_articles = [article for article in articles or [] if article]
-    parts = [
-        "TIN TỨC MỚI TỪ PNEWS",
-        f"Cập nhật ngày {formatFacebookPostUpdatedAt()}",
-        "",
-    ]
-
-    for index, article in enumerate(valid_articles, start=1):
-        title = str(article.get("title") or "Cập nhật tin tức mới").strip()
-        summary = str(article.get("summary") or "").strip()
-        source = str(article.get("source") or "PNews").strip()
-        url = str(article.get("url") or "").strip()
-
-        parts.append(f"{index}. {title}")
-        if summary:
-            parts.append(summary)
-        parts.append(f"Nguồn: {source}")
-        if url:
-            parts.append(f"🔗 Xem chi tiết: {url}")
-        parts.append("")
-
-    parts.extend(
-        [
-            "#PNews #PTIT #TinTucCongNghe #GiaoDuc #KhoaHocCongNghe",
-        ]
-    )
-    return "\n".join(parts).strip()
+    return buildFacebookMainCaption()
 
 
 def ensure_generated_images_for_articles(article_ids):
@@ -1237,7 +1220,13 @@ def publish_article_to_facebook(article_id):
     }, HTTPStatus.BAD_GATEWAY
 
 
-def publish_articles_to_facebook_bulk(article_ids, delay_seconds=1.2):
+def publish_articles_to_facebook_bulk(
+    article_ids,
+    delay_seconds=1.2,
+    main_caption_override="",
+    photo_caption_overrides=None,
+    dry_run=False,
+):
     clean_ids = []
     seen_ids = set()
     for raw_id in article_ids or []:
@@ -1370,7 +1359,7 @@ def publish_articles_to_facebook_bulk(article_ids, delay_seconds=1.2):
             "results": results,
         }
 
-    caption = build_facebook_bulk_caption(publish_articles)
+    caption = str(main_caption_override or build_facebook_bulk_caption(publish_articles)).strip()
     for article in publish_articles:
         update_article_facebook_fields(
             article["id"],
@@ -1380,9 +1369,32 @@ def publish_articles_to_facebook_bulk(article_ids, delay_seconds=1.2):
         )
 
     try:
-        response = publishMultiPhotoPost(caption, image_paths)
-        photo_id = str(response.get("id") or "").strip()
-        post_id = str(response.get("post_id") or photo_id).strip()
+        publication, response = publishFacebookNewsBatch(
+            publish_articles,
+            image_paths,
+            main_caption=caption,
+            client=FacebookApiClient.from_env(dry_run=bool(dry_run)),
+            photo_captions=photo_caption_overrides or {},
+        )
+        if publication.dry_run:
+            for article in publish_articles:
+                update_article_facebook_fields(
+                    article["id"],
+                    facebook_publish_status="not_posted",
+                    facebook_publish_error="Dry-run: chưa gọi Facebook API.",
+                    facebook_caption=caption,
+                )
+            return {
+                "success": True,
+                "message": f"Đã tạo dry-run preview cho {len(publish_articles)} ảnh.",
+                "post_count": 0,
+                "dry_run": True,
+                "publication": publication.to_dict(),
+                "results": results,
+            }
+
+        photo_id = ""
+        post_id = str(publication.facebook_post_id or response.get("id") or response.get("post_id") or "").strip()
         if not post_id:
             raise FacebookPublishError("Facebook API khong tra ve post_id.")
 
@@ -1425,7 +1437,14 @@ def publish_articles_to_facebook_bulk(article_ids, delay_seconds=1.2):
             "facebook_permalink": permalink,
             "results": results,
         }
-    except (FacebookConfigError, FacebookAPIError, FacebookPublishError) as exc:
+    except (
+        FacebookConfigError,
+        FacebookAPIError,
+        FacebookPublishError,
+        FacebookApiClientError,
+        FacebookPublicationError,
+        ValueError,
+    ) as exc:
         safe_error = str(exc)[:1000]
         LOGGER.error("Dang Facebook bulk that bai ids=%s error=%s", clean_ids, safe_error)
     except Exception as exc:
@@ -1456,6 +1475,9 @@ def publish_articles_to_facebook_bulk(article_ids, delay_seconds=1.2):
 
 
 def summarize_facebook_bulk_result(result):
+    if result.get("dry_run"):
+        publication = result.get("publication") or {}
+        return f"Facebook dry-run: đã tạo preview publication {publication.get('id', '')}."
     results = result.get("results") or []
     sent = sum(1 for item in results if item.get("status") == "success")
     skipped = sum(1 for item in results if item.get("status") == "skipped")
@@ -3216,6 +3238,10 @@ def render_bulk_actions(status):
     if status == "approved":
         buttons.insert(
             0,
+            '<button class="button ghost" type="submit" formaction="/admin/articles/facebook-preview-bulk" data-requires-selection data-confirm-bulk="Bạn chưa chọn bài nào." disabled aria-disabled="true">Xem trước Facebook</button>',
+        )
+        buttons.insert(
+            0,
             '<button class="button ghost" name="bulk_action" value="clear_facebook" type="submit" data-requires-selection data-confirm-bulk="Bạn chưa chọn bài nào." data-confirm="Gỡ tag Đã đăng FB cho các bài đã chọn? Thao tác này không xóa bài trên Facebook." disabled aria-disabled="true">Gỡ tag FB đã chọn</button>',
         )
         buttons.insert(
@@ -3227,6 +3253,63 @@ def render_bulk_actions(status):
             '<button class="button primary" type="button" data-export-selected-png data-requires-selection data-confirm-bulk="Bạn chưa chọn bài nào." disabled aria-disabled="true">Export PNG</button>',
         )
     return "".join(buttons)
+
+
+def render_facebook_batch_preview(article_ids):
+    clean_ids = [int(value) for value in article_ids if str(value).isdigit()]
+    if not clean_ids:
+        return render_admin_page(
+            "Facebook Preview",
+            '<section class="empty-state"><h1>Chưa chọn bài nào</h1><a class="button" href="/admin?status=approved">Quay lại</a></section>',
+        )
+    placeholders = ",".join("?" for _ in clean_ids)
+    with connect_db() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM articles WHERE id IN ({placeholders})",
+            clean_ids,
+        ).fetchall()
+    by_id = {int(row["id"]): article_to_dict(row) for row in rows}
+    ordered = [by_id[article_id] for article_id in clean_ids if article_id in by_id]
+    cards = []
+    for order, article in enumerate(ordered, start=1):
+        article_id = int(article["id"])
+        image_url = article_image_url(article)
+        caption = buildFacebookPhotoCaption(article, order=order)
+        cards.append(
+            f"""
+            <article class="admin-card facebook-preview-item">
+              <label class="select-row">
+                <input type="checkbox" name="article_ids" value="{article_id}" checked>
+                <strong>Giữ ảnh {order} trong batch</strong>
+              </label>
+              <img src="{escape(image_url)}" alt="{escape(article.get('title'))}" loading="lazy">
+              <label>Caption riêng của ảnh
+                <textarea name="photo_caption_{article_id}" rows="9">{escape(caption)}</textarea>
+              </label>
+              <a class="button ghost" href="/admin/articles/{article_id}/edit">Sửa nội dung bài gốc</a>
+            </article>
+            """
+        )
+    body = f"""
+    <section class="admin-head">
+      <div><p class="eyebrow">Facebook</p><h1>Xem trước bài nhiều ảnh</h1>
+      <p>Bỏ chọn một ảnh để loại khỏi batch; có thể sửa caption trước khi đăng.</p></div>
+      <a class="button ghost" href="/admin?status=approved">Quay lại</a>
+    </section>
+    <form method="post" action="/admin/articles/publish-facebook-bulk">
+      <section class="form-card">
+        <label>Caption bài chính
+          <textarea name="main_caption" rows="7">{escape(buildFacebookMainCaption())}</textarea>
+        </label>
+      </section>
+      <section class="admin-list">{''.join(cards)}</section>
+      <div class="bulk-actions">
+        <button class="button ghost" type="submit" name="dry_run" value="1">Đăng thử (dry-run)</button>
+        <button class="button primary" type="submit" data-confirm="Đăng bài nhiều ảnh này lên Facebook Page?">Đăng Facebook</button>
+      </div>
+    </form>
+    """
+    return render_admin_page("Facebook Preview", body)
 
 
 def render_facebook_status_badge(article):
@@ -3289,11 +3372,19 @@ def render_facebook_preview(article):
         return ""
 
     facebook_status = article_facebook_status(data)
-    caption = (
-        data.get("facebook_caption")
-        if facebook_status == "success" and data.get("facebook_caption")
-        else buildFacebookCaption(data)
+    latest_media = FacebookPublicationRepository(DB_PATH).get_latest_media_for_article(data["id"])
+    main_caption = (
+        (latest_media or {}).get("main_caption")
+        or (
+            data.get("facebook_caption")
+            if facebook_status == "success" and data.get("facebook_caption")
+            else buildFacebookMainCaption()
+        )
     )
+    photo_caption = (latest_media or {}).get("photo_caption") or buildFacebookPhotoCaption(data, order=1)
+    upload_status = (latest_media or {}).get("upload_status") or "PENDING"
+    facebook_photo_id = (latest_media or {}).get("facebook_photo_id") or ""
+    publication_id = (latest_media or {}).get("publication_id") or ""
     image_url = article_image_url(article)
     image = (
         f'<img src="{escape(image_url)}" alt="{escape(data.get("title"))}" loading="lazy">'
@@ -3313,10 +3404,16 @@ def render_facebook_preview(article):
           <div class="facebook-preview-body">
             <div class="facebook-preview-image">{image}</div>
             <div class="facebook-preview-copy">
-              <pre>{escape(caption)}</pre>
+              <strong>Caption bài chính</strong>
+              <pre>{escape(main_caption)}</pre>
+              <strong>Caption riêng của ảnh</strong>
+              <pre>{escape(photo_caption)}</pre>
               <div class="facebook-preview-meta">
                 <span>Nguồn: {escape(source)}</span>
                 <span>{link}</span>
+                <span>Upload: {escape(upload_status)}</span>
+                <span>publicationId: {escape(publication_id or '—')}</span>
+                <span>facebookPhotoId: {escape(facebook_photo_id or '—')}</span>
               </div>
             </div>
           </div>
@@ -3669,6 +3766,8 @@ class CMSHandler(BaseHTTPRequestHandler):
             self.require_admin(lambda: self.handle_client_order_move(path))
         elif re.fullmatch(r"/admin/articles/\d+/edit", path):
             self.require_admin(lambda: self.handle_article_edit_post(path))
+        elif path == "/admin/articles/facebook-preview-bulk":
+            self.require_admin(self.handle_facebook_preview_bulk)
         elif path == "/admin/articles/publish-facebook-bulk":
             self.require_admin(self.handle_facebook_publish_bulk)
         elif path.startswith("/admin/articles/"):
@@ -3879,7 +3978,24 @@ class CMSHandler(BaseHTTPRequestHandler):
             return
 
         delay_seconds = payload.get("delay_seconds", 1.2) if wants_json else 1.2
-        result = publish_articles_to_facebook_bulk(clean_ids, delay_seconds=delay_seconds)
+        if wants_json:
+            main_caption = str(payload.get("main_caption") or "")
+            photo_captions = payload.get("photo_captions") or {}
+            dry_run = bool(payload.get("dry_run"))
+        else:
+            main_caption = (fields.get("main_caption") or [""])[0]
+            photo_captions = {
+                article_id: (fields.get(f"photo_caption_{article_id}") or [""])[0]
+                for article_id in clean_ids
+            }
+            dry_run = (fields.get("dry_run") or [""])[0] in {"1", "true", "yes"}
+        result = publish_articles_to_facebook_bulk(
+            clean_ids,
+            delay_seconds=delay_seconds,
+            main_caption_override=main_caption,
+            photo_caption_overrides=photo_captions,
+            dry_run=dry_run,
+        )
         if wants_json:
             self.respond_json(result)
             return
@@ -3891,6 +4007,10 @@ class CMSHandler(BaseHTTPRequestHandler):
                 notice=summarize_facebook_bulk_result(result),
             )
         )
+
+    def handle_facebook_preview_bulk(self):
+        fields = self.read_form_multi()
+        self.respond_html(render_facebook_batch_preview(fields.get("article_ids", [])))
 
     def handle_article_edit_get(self, path):
         match = re.fullmatch(r"/admin/articles/(\d+)/edit", path)
