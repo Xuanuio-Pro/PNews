@@ -43,16 +43,19 @@ CONTENT_BG = (234, 242, 248)  # #EAF2F8
 TITLE_X = 56
 TITLE_Y = 700
 TITLE_MAX_WIDTH = 968
-TITLE_MAX_LINES = 3
+TITLE_MAX_LINES = 4
 TITLE_FONT_SIZE = 64
+TITLE_MIN_FONT_SIZE = 48
+TITLE_MAX_HEIGHT = 246
 TITLE_LINE_SPACING = 12
 
 SUMMARY_X = 56
 SUMMARY_MAX_WIDTH = 968
 SUMMARY_MAX_LINES = 5
 SUMMARY_FONT_SIZE = 40
+SUMMARY_MIN_FONT_SIZE = 34
 SUMMARY_LINE_SPACING = 10
-SUMMARY_TOP_GAP = 55
+SUMMARY_TOP_GAP = 38
 
 SOURCE_FONT_SIZE = 32
 SOURCE_RIGHT_PADDING = 56
@@ -461,16 +464,18 @@ def _draw_logo(canvas, brand_text):
 
 
 def _draw_content(draw, article):
-    title_font = _load_bold_font(TITLE_FONT_SIZE)
-    summary_font = _load_regular_font(SUMMARY_FONT_SIZE)
     source_font = _load_regular_font(SOURCE_FONT_SIZE)
 
-    title_lines = wrap_text_by_width(
+    title_font, title_lines = _fit_text_to_box(
         draw=draw,
         text=article.get("title", ""),
-        font=title_font,
+        font_loader=_load_bold_font,
+        max_font_size=TITLE_FONT_SIZE,
+        min_font_size=TITLE_MIN_FONT_SIZE,
         max_width=TITLE_MAX_WIDTH,
         max_lines=TITLE_MAX_LINES,
+        max_height=TITLE_MAX_HEIGHT,
+        line_spacing=TITLE_LINE_SPACING,
     )
 
     y = TITLE_Y
@@ -501,25 +506,57 @@ def _draw_content(draw, article):
     source_line_h = _line_height(draw, source_font)
     source_y = CANVAS_HEIGHT - SOURCE_BOTTOM_PADDING - source_line_h
 
-    summary_line_h = _line_height(draw, summary_font) + SUMMARY_LINE_SPACING
-    available_summary_h = max(source_y - summary_y - 24, summary_line_h)
-    max_lines_by_height = max(1, available_summary_h // summary_line_h)
-    summary_max_lines = min(SUMMARY_MAX_LINES, max_lines_by_height)
-
-    summary_lines = wrap_text_by_width(
+    available_summary_h = max(source_y - summary_y - 24, 1)
+    summary_font, summary_lines = _fit_text_to_box(
         draw=draw,
         text=article.get("summary", ""),
-        font=summary_font,
+        font_loader=_load_regular_font,
+        max_font_size=SUMMARY_FONT_SIZE,
+        min_font_size=SUMMARY_MIN_FONT_SIZE,
         max_width=SUMMARY_MAX_WIDTH,
-        max_lines=summary_max_lines,
+        max_lines=SUMMARY_MAX_LINES,
+        max_height=available_summary_h,
+        line_spacing=SUMMARY_LINE_SPACING,
     )
 
+    summary_line_h = _line_height(draw, summary_font) + SUMMARY_LINE_SPACING
     y = summary_y
     for line in summary_lines:
         _draw_text(draw, (SUMMARY_X, y), line, summary_font, TEXT_SUMMARY)
         y += summary_line_h
 
     _draw_text(draw, (source_x, source_y), source_text, source_font, TEXT_SOURCE)
+
+
+def _fit_text_to_box(
+    draw,
+    text,
+    font_loader,
+    max_font_size,
+    min_font_size,
+    max_width,
+    max_lines,
+    max_height,
+    line_spacing,
+):
+    """Use the largest font that keeps wrapped text inside a fixed text box."""
+    raw = _clean_display_text(text)
+    minimum = max(1, min(min_font_size, max_font_size))
+
+    for font_size in range(max_font_size, minimum - 1, -2):
+        font = font_loader(font_size)
+        lines = _wrap_text_unlimited(draw, raw, font, max_width)
+        line_height = _line_height(draw, font) + line_spacing
+        if len(lines) <= max_lines and len(lines) * line_height <= max_height:
+            return font, lines
+
+    font = font_loader(minimum)
+    line_height = _line_height(draw, font) + line_spacing
+    lines_by_height = int(max_height // line_height)
+    if lines_by_height < 1:
+        return font, []
+    fitted_lines = min(max_lines, lines_by_height)
+    return font, wrap_text_by_width(draw, raw, font, max_width, fitted_lines)
 
 
 def _build_source_label(source, category, content_topic):
