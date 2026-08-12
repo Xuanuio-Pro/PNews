@@ -355,9 +355,24 @@ ghi vào `data/facebook_previews/`.
 Unit test và integration test với mock HTTP server:
 
 ```powershell
+python -m unittest scripts.test_publication_upload_flow -v
 python -m unittest scripts.test_facebook_publication -v
 python -m unittest scripts.test_facebook_api_integration -v
 ```
+
+`test_publication_upload_flow` là smoke test an toàn cho luồng ấn phẩm trong CMS:
+upload ảnh vào hàng chờ, kiểm tra file và database, duyệt bài rồi xác nhận card xuất
+hiện trên client. Test chỉ dùng thư mục/database tạm, không sửa dữ liệu đang chạy và
+không gọi dịch vụ bên ngoài; nên chạy lệnh này sau mỗi lần cập nhật code.
+
+Để tạo một ảnh mẫu và kiểm tra trực quan kết quả renderer sau khi cập nhật:
+
+```powershell
+python scripts/run_publication_visual_smoke.py
+```
+
+Ảnh mới nhất được ghi tại `data/qa/publication_visual/latest.jpg`. Script đồng thời
+kiểm tra ảnh mở được, đúng kích thước `1080x1350` và không phải ảnh một màu.
 
 Test thật đúng hai ảnh luôn yêu cầu xác nhận rõ ràng:
 
