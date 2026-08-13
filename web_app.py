@@ -2004,14 +2004,18 @@ def get_admin_dashboard_stats():
     return stats
 
 
-def make_media_url(path_or_url):
+def make_media_url(path_or_url, version=""):
     value = str(path_or_url or "").strip()
     if not value:
         return ""
     if value.startswith(("http://", "https://")):
         return value
     safe_value = value.replace("\\", "/")
-    return f"/media/{quote(safe_value, safe='/')}"
+    media_url = f"/media/{quote(safe_value, safe='/')}"
+    clean_version = str(version or "").strip()
+    if clean_version:
+        media_url += f"?v={quote(clean_version, safe='')}"
+    return media_url
 
 
 def article_image_url(article):
@@ -2020,16 +2024,20 @@ def article_image_url(article):
         generated_poster_image = article["generated_poster_image"] or ""
         image_path = article["image_path"] or ""
         thumbnail = article["thumbnail"] or ""
+        updated_at = article["updated_at"] or ""
     else:
         title = article.get("title", "")
         generated_poster_image = article.get("generated_poster_image", "")
         image_path = article.get("image_path", "")
         thumbnail = article.get("thumbnail", "")
+        updated_at = article.get("updated_at", "")
 
     local_image = to_relative_media_path(generated_poster_image) or to_relative_media_path(image_path)
     rendered = find_rendered_image(title)
     fallback = DEFAULT_THUMBNAIL if (BASE_DIR / DEFAULT_THUMBNAIL).exists() else ""
-    return make_media_url(local_image or rendered or thumbnail or fallback)
+    selected_image = local_image or rendered or thumbnail or fallback
+    version = updated_at if local_image or rendered else ""
+    return make_media_url(selected_image, version=version)
 
 
 def article_target_url(article):
