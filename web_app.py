@@ -31,7 +31,7 @@ from services.facebook_service import (
     getPostInfo,
     publishPhotoPost,
 )
-from services.facebook_api_client import FacebookApiClientError
+from services.facebook_api_client import FacebookApiClient, FacebookApiClientError
 from services.facebook_captions import (
     buildFacebookMainCaption,
     buildFacebookPhotoCaption,
@@ -41,7 +41,7 @@ from services.facebook_publisher import (
     FacebookPublicationError,
     publishFacebookNewsBatch,
 )
-from services.config import get_config_value
+from services.config import get_config_value, get_int_config_value
 from services.image_generator import generate_news_card
 from services.notification_service import NotificationService
 from config.settings import (
@@ -64,6 +64,7 @@ ASSET_DIR = BASE_DIR / "web_assets"
 DEFAULT_THUMBNAIL = "PNews.png"
 SITE_LOGO_URL = "/assets/pnews-logo.png"
 ASSET_VERSION = str(int(time.time()))
+FACEBOOK_MAX_PHOTOS_PER_POST = 10
 
 def load_admin_accounts():
     raw_accounts = ADMIN_ACCOUNTS_RAW
@@ -1244,6 +1245,55 @@ def publish_articles_to_facebook_bulk(
             "results": [],
         }
 
+    max_photos = max(
+        2,
+        get_int_config_value(
+            "FACEBOOK_MAX_PHOTOS_PER_POST",
+            FACEBOOK_MAX_PHOTOS_PER_POST,
+        ),
+    )
+    if len(clean_ids) > max_photos:
+        batch_results = []
+        combined_results = []
+        post_count = 0
+        for batch_index, start in enumerate(range(0, len(clean_ids), max_photos), start=1):
+            batch_ids = clean_ids[start : start + max_photos]
+            batch_result = publish_articles_to_facebook_bulk(
+                batch_ids,
+                delay_seconds=delay_seconds,
+                main_caption_override=main_caption_override,
+                photo_caption_overrides=photo_caption_overrides,
+                dry_run=dry_run,
+            )
+            batch_results.append(
+                {
+                    "batch": batch_index,
+                    "article_ids": batch_ids,
+                    "success": bool(batch_result.get("success")),
+                    "post_count": int(batch_result.get("post_count") or 0),
+                    "message": batch_result.get("message") or "",
+                }
+            )
+            combined_results.extend(batch_result.get("results") or [])
+            post_count += int(batch_result.get("post_count") or 0)
+            if start + max_photos < len(clean_ids) and not dry_run and delay_seconds:
+                time.sleep(max(0, float(delay_seconds)))
+
+        failed = sum(1 for item in combined_results if item.get("status") == "failed")
+        skipped = sum(1 for item in combined_results if item.get("status") == "skipped")
+        return {
+            "success": failed == 0 and post_count > 0,
+            "message": (
+                f"Đã chia {len(clean_ids)} bài thành {len(batch_results)} nhóm Facebook; "
+                f"đăng thành công {post_count} post, bỏ qua {skipped}, lỗi {failed}."
+            ),
+            "post_count": post_count,
+            "batch_count": len(batch_results),
+            "batches": batch_results,
+            "results": combined_results,
+            "dry_run": bool(dry_run),
+        }
+
     if len(clean_ids) == 1:
         article_id = clean_ids[0]
         result, status_code = publish_article_to_facebook(article_id)
@@ -1476,15 +1526,30 @@ def publish_articles_to_facebook_bulk(
 
 def summarize_facebook_bulk_result(result):
     if result.get("dry_run"):
+        if result.get("batches"):
+            return (
+                f"Facebook dry-run: đã tạo {len(result['batches'])} preview cho "
+                f"{len(result.get('results') or [])} bài đã chọn."
+            )
         publication = result.get("publication") or {}
         return f"Facebook dry-run: đã tạo preview publication {publication.get('id', '')}."
     results = result.get("results") or []
     sent = sum(1 for item in results if item.get("status") == "success")
     skipped = sum(1 for item in results if item.get("status") == "skipped")
     failed = sum(1 for item in results if item.get("status") == "failed")
-    if result.get("post_count") == 1 and sent > 1:
-        return f"Facebook: Đã đăng bài viết cho {sent} bài đã chọn, bỏ qua {skipped}, lỗi {failed}."
-    return f"Facebook: Đã đăng bài viết cho {sent} bài đã chọn, bỏ qua {skipped}, lỗi {failed}."
+    post_count = int(result.get("post_count") or 0)
+    summary = (
+        f"Facebook: Đã đăng {post_count} post cho {sent} bài đã chọn, "
+        f"bỏ qua {skipped}, lỗi {failed}."
+    )
+    errors = []
+    for item in results:
+        error = str(item.get("error") or item.get("reason") or "").strip()
+        if error and error not in errors:
+            errors.append(error)
+    if errors:
+        summary += f" Nguyên nhân: {errors[0][:300]}"
+    return summary
 
 
 def create_uploaded_article(fields, file_part):

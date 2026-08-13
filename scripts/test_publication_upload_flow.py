@@ -2,6 +2,7 @@ import io
 import sqlite3
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -142,6 +143,63 @@ class PublicationUploadFlowTests(unittest.TestCase):
             )
 
         self.assertEqual(web_app.count_articles(), 0)
+
+    def test_twelve_facebook_articles_are_split_into_safe_batches(self):
+        article_ids = []
+        for index in range(12):
+            article_id, status = web_app.create_uploaded_article(
+                {
+                    "title": f"Ấn phẩm Facebook {index + 1}",
+                    "summary": "Tóm tắt kiểm thử đăng Facebook theo nhóm.",
+                    "source": "PNews QA",
+                    "url": f"https://example.com/facebook-{index + 1}",
+                    "publish_now": "on",
+                },
+                self.make_png_file_part(f"facebook-{index + 1}.png"),
+            )
+            self.assertEqual(status, "approved")
+            article_ids.append(article_id)
+
+        published_sizes = []
+
+        def fake_publish(articles, image_paths, **_kwargs):
+            published_sizes.append(len(articles))
+            post_id = f"page_post-{len(published_sizes)}"
+            return SimpleNamespace(
+                dry_run=False,
+                facebook_post_id=post_id,
+            ), {"id": post_id}
+
+        with (
+            patch.object(web_app, "publishFacebookNewsBatch", side_effect=fake_publish),
+            patch.object(web_app.FacebookApiClient, "from_env", return_value=object()),
+            patch.object(web_app, "getPostInfo", return_value={"permalink_url": "https://facebook.test/post"}),
+            patch.object(web_app.time, "sleep", return_value=None),
+        ):
+            result = web_app.publish_articles_to_facebook_bulk(article_ids)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["post_count"], 2)
+        self.assertEqual(result["batch_count"], 2)
+        self.assertEqual(published_sizes, [10, 2])
+        self.assertEqual(
+            sum(1 for item in result["results"] if item["status"] == "success"),
+            12,
+        )
+
+    def test_facebook_summary_includes_first_real_error(self):
+        summary = web_app.summarize_facebook_bulk_result(
+            {
+                "post_count": 0,
+                "results": [
+                    {"article_id": 1, "status": "failed", "error": "Invalid OAuth token (code=190)"},
+                    {"article_id": 2, "status": "failed", "error": "Invalid OAuth token (code=190)"},
+                ],
+            }
+        )
+
+        self.assertIn("lỗi 2", summary)
+        self.assertIn("Invalid OAuth token (code=190)", summary)
 
 
 if __name__ == "__main__":
